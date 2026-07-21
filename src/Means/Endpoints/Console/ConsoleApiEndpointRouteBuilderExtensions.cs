@@ -728,9 +728,15 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         IConsoleStore consoleStore,
         CancellationToken cancellationToken)
     {
-        var query = string.IsNullOrWhiteSpace(request.VersionId)
-            ? null
-            : new Dictionary<string, string> { ["versionId"] = request.VersionId };
+        var query = new Dictionary<string, string>();
+        if (!string.IsNullOrWhiteSpace(request.VersionId))
+        {
+            query["versionId"] = request.VersionId;
+        }
+        if (!string.IsNullOrWhiteSpace(request.ResponseContentDisposition))
+        {
+            query["response-content-disposition"] = request.ResponseContentDisposition;
+        }
         var response = CreatePresignedResponse(
             context,
             bucketName,
@@ -739,7 +745,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
             request.ExpiresSeconds,
             storageOptions.Value,
             await settings.GetAsync(cancellationToken),
-            query);
+            query.Count > 0 ? query : null);
         await AppendAuditAsync(consoleStore, Actor(context), "object.presign-download", $"{bucketName}/{request.Key}", "success", null, cancellationToken);
         return Results.Ok(response);
     }
@@ -1273,7 +1279,7 @@ public sealed record PolicyResponse(string Policy);
 
 public sealed record CopyObjectConsoleRequest(string SourceBucket, string SourceKey, string DestinationKey);
 
-public sealed record PresignRequest(string Key, int? ExpiresSeconds, string? VersionId = null);
+public sealed record PresignRequest(string Key, int? ExpiresSeconds, string? VersionId = null, string? ResponseContentDisposition = null);
 
 public sealed record PresignedTransferResponse(string Method, string Url, int ExpiresSeconds);
 

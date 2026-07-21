@@ -967,6 +967,14 @@ public sealed class MeansClient : IDisposable
     }
 
     /// <summary>
+    /// Creates a SigV4 presigned GET URL with a custom Content-Disposition for the download.
+    /// </summary>
+    public PresignedRequest CreatePresignedGetUrl(string bucketName, string key, string? versionId, TimeSpan expires, string responseContentDisposition)
+    {
+        return CreatePresignedUrl(HttpMethod.Get, bucketName, key, expires, VersionAndDispositionQuery(versionId, responseContentDisposition));
+    }
+
+    /// <summary>
     /// Creates a SigV4 presigned GET URL.
     /// </summary>
     public Task<PresignedRequest> CreatePresignedGetUrlAsync(
@@ -991,6 +999,21 @@ public sealed class MeansClient : IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(CreatePresignedGetUrl(bucketName, key, versionId, expires));
+    }
+
+    /// <summary>
+    /// Creates a SigV4 presigned GET URL with a custom Content-Disposition for the download.
+    /// </summary>
+    public Task<PresignedRequest> CreatePresignedGetUrlAsync(
+        string bucketName,
+        string key,
+        string? versionId,
+        TimeSpan expires,
+        string responseContentDisposition,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(CreatePresignedGetUrl(bucketName, key, versionId, expires, responseContentDisposition));
     }
 
     /// <summary>
@@ -1232,6 +1255,26 @@ public sealed class MeansClient : IDisposable
         return string.IsNullOrWhiteSpace(versionId)
             ? null
             : new[] { new KeyValuePair<string, string>("versionId", versionId) };
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, string>>? VersionAndDispositionQuery(string? versionId, string? responseContentDisposition)
+    {
+        var hasVersion = !string.IsNullOrWhiteSpace(versionId);
+        var hasDisposition = !string.IsNullOrWhiteSpace(responseContentDisposition);
+        if (!hasVersion && !hasDisposition)
+        {
+            return null;
+        }
+        var query = new List<KeyValuePair<string, string>>();
+        if (hasVersion)
+        {
+            query.Add(new KeyValuePair<string, string>("versionId", versionId!));
+        }
+        if (hasDisposition)
+        {
+            query.Add(new KeyValuePair<string, string>("response-content-disposition", responseContentDisposition!));
+        }
+        return query;
     }
 
     private static IReadOnlyList<KeyValuePair<string, string>> TaggingQuery(string? versionId)

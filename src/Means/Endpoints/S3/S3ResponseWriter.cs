@@ -63,7 +63,7 @@ internal static class S3ResponseWriter
         bool headOnly,
         CancellationToken cancellationToken)
     {
-        await WriteObjectAsync(context, store, bucketName, key, versionId: null, bucketSettings, headOnly, cancellationToken);
+        await WriteObjectAsync(context, store, bucketName, key, versionId: null, responseContentDisposition: null, bucketSettings, headOnly, cancellationToken);
     }
 
     public static async Task WriteObjectAsync(
@@ -72,13 +72,14 @@ internal static class S3ResponseWriter
         string bucketName,
         string key,
         string? versionId,
+        string? responseContentDisposition,
         BucketSettings bucketSettings,
         bool headOnly,
         CancellationToken cancellationToken)
     {
         await using var data = await store.GetObjectAsync(bucketName, key, versionId, cancellationToken);
         var info = data.Info;
-        WriteObjectHeaders(context, info, bucketSettings);
+        WriteObjectHeaders(context, info, bucketSettings, responseContentDisposition);
         if (!string.IsNullOrWhiteSpace(versionId))
         {
             context.Response.Headers["x-amz-version-id"] = info.ObjectId;
@@ -176,7 +177,7 @@ internal static class S3ResponseWriter
         }
     }
 
-    private static void WriteObjectHeaders(HttpContext context, ObjectInfo info, BucketSettings bucketSettings)
+    private static void WriteObjectHeaders(HttpContext context, ObjectInfo info, BucketSettings bucketSettings, string? responseContentDisposition = null)
     {
         context.Response.ContentType = info.ContentType;
         context.Response.Headers.ETag = S3Xml.QuoteEtag(info.ETag);
@@ -191,7 +192,11 @@ internal static class S3ResponseWriter
             context.Response.Headers.CacheControl = defaultCacheControl;
         }
 
-        if (!string.IsNullOrWhiteSpace(info.ContentDisposition))
+        if (!string.IsNullOrWhiteSpace(responseContentDisposition))
+        {
+            context.Response.Headers.ContentDisposition = responseContentDisposition;
+        }
+        else if (!string.IsNullOrWhiteSpace(info.ContentDisposition))
         {
             context.Response.Headers.ContentDisposition = info.ContentDisposition;
         }

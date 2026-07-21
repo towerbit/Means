@@ -1,0 +1,42 @@
+完整步骤
+# 1. 构建前端
+cd web
+npm ci
+npm run build
+
+# 2. 复制到部署目录
+构建生成的文件在 ../publish/wwwroot
+需要手动复制到发布目录 publish/ 下
+└─wwwroot
+    │  index.html
+    │  vite.svg
+    └─assets
+        AccessKeysPage-D7Ft421c.js
+        alert-dialog-CISD2Ae-.js
+        AuditPage-CaKz56pp.js
+        BucketDetailPage-rCcZDtDv.js
+        BucketsPage-LXkV-ITC.js
+        ClusterPage-BbUqSE47.js
+        copy-D6T4iZOs.js
+        DashboardPage-nuOOpMWS.js
+        ellipsis-woT0DlUI.js
+        formatters-Db6qH99-.js
+        HealthPage-CPg5GSqo.js
+        index-BGr-_-av.css
+        index-C1IZJ3VN.js
+        input-BZ4ZCXuB.js
+        inter-cyrillic-ext-wght-normal-BOeWTOD4.woff2
+        inter-cyrillic-wght-normal-DqGufNeO.woff2
+        inter-greek-ext-wght-normal-DlzME5K_.woff2
+        inter-greek-wght-normal-CkhJZR-_.woff2
+        inter-latin-ext-wght-normal-DO1Apj_S.woff2
+        inter-latin-wght-normal-Dx4kXJAl.woff2
+        inter-vietnamese-wght-normal-CBcvBZtf.woff2
+        LoginPage-8uPJulEn.js
+        PageHeader-DKbpBdB0.js
+        progress-C5Qiy29t.js
+        refresh-cw-xa_WzkRG.js
+        rotate-cw-uj1oMwFr.js
+        save-OFsCM5eh.js
+        SettingsPage-jA3o7PiT.js
+        table-N2JzWUsN.js

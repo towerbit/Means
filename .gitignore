@@ -10,3 +10,8 @@ dist/
 !/src/Means/wwwroot/index.html
 /.vs
 /src/Means/Means.csproj.user
+/publish/wwwroot
+/src/Means/Properties/PublishProfiles
+/src/Means/dotnet-tools.json
+/SDKs/csharp/Means.Client.csproj.user
+/.spec-workflow

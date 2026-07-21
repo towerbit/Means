@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3 - 2026-07-21
+
+- Support custom download filename by `response-Content-Disposition`
+
 ## 0.1.2 - 2026-06-05
 
 - Bumped the C# and TypeScript SDK package versions to `0.1.2`.

@@ -79,12 +79,14 @@ internal static class S3ObjectEndpoint
         {
             await authorizer.AuthorizeAsync(context, S3Actions.GetObject, bucketName, key, requireAuthenticated: false, cancellationToken);
             var bucketSettings = await consoleStore.GetBucketSettingsAsync(bucketName, cancellationToken);
+            var responseContentDisposition = context.Request.Query["response-content-disposition"].FirstOrDefault();
             await S3ResponseWriter.WriteObjectAsync(
                 context,
                 store,
                 bucketName,
                 key,
                 context.Request.Query["versionId"].FirstOrDefault(),
+                responseContentDisposition,
                 bucketSettings,
                 headOnly: HttpMethods.IsHead(method),
                 cancellationToken);
