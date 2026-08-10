@@ -65,6 +65,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         authenticated.MapGet("/access-keys", AccessKeysAsync);
         authenticated.MapPost("/access-keys", CreateAccessKeyAsync);
         authenticated.MapDelete("/access-keys/{accessKey}", DeleteAccessKeyAsync);
+        authenticated.MapPut("/access-keys/{accessKey}/status", SetAccessKeyStatusAsync);
         authenticated.MapGet("/access-keys/{accessKey}/policy", GetAccessKeyPolicyAsync);
         authenticated.MapPut("/access-keys/{accessKey}/policy", PutAccessKeyPolicyAsync);
         authenticated.MapDelete("/access-keys/{accessKey}/policy", DeleteAccessKeyPolicyAsync);
@@ -817,6 +818,25 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         return Results.NoContent();
     }
 
+    private static async Task<IResult> SetAccessKeyStatusAsync(
+        HttpContext context,
+        string accessKey,
+        SetAccessKeyStatusRequest request,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        await consoleStore.SetAccessKeyEnabledAsync(accessKey, request.Enabled, cancellationToken);
+        await AppendAuditAsync(
+            consoleStore,
+            Actor(context),
+            request.Enabled ? "access-key.enable" : "access-key.disable",
+            accessKey,
+            "success",
+            null,
+            cancellationToken);
+        return Results.NoContent();
+    }
+
     private static async Task<IResult> GetAccessKeyPolicyAsync(
         string accessKey,
         IConsoleStore consoleStore,
@@ -1404,6 +1424,8 @@ public sealed record CompletedMultipartPartConsoleRequest(int PartNumber, string
 public sealed record AbortMultipartConsoleRequest(string Key, string UploadId);
 
 public sealed record CreateAccessKeyRequest(string? AccessKey, string? Policy = null);
+
+public sealed record SetAccessKeyStatusRequest(bool Enabled);
 
 public sealed record UpdateSystemSettingsRequest(long MaxUploadSizeBytes, string? PublicOrigin = null);
 

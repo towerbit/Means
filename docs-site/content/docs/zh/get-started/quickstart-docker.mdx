@@ -37,3 +37,17 @@ http://localhost:5178/s3/{bucket}/{key}
 ## 注意
 
 生产部署必须覆盖默认 Console 密码和默认 AccessKey/SecretKey。多节点实验拓扑见 [Multi-node Experimental Topology](../operations/multinode-topology)。
+
+
+## 覆盖凭证
+
+Compose 只会从宿主机环境变量或根目录 `.env` 插值 `MEANS_ACCESS_KEY` / `MEANS_SECRET_KEY`。只在 Compose `environment:` 块里写同名兄弟变量**不会**影响 `${MEANS_SECRET_KEY}`。
+
+```bash
+export MEANS_ACCESS_KEY=meansadmin
+export MEANS_SECRET_KEY='your-strong-secret'
+docker compose up -d --force-recreate
+```
+
+Means 会在每次启动时把配置中的 bootstrap secret 同步到元数据。轮换 `DefaultSecretKey` **不必**删除 persistent volume。若要删除 bootstrap AccessKey（`meansadmin`），请先在 Console 创建另一把已启用的密钥，再删除或禁用它。
+

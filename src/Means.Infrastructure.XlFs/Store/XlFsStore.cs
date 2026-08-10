@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Means.Core;
@@ -102,19 +102,51 @@ public sealed partial class XlFsStore : IObjectStore,
                 Path.Combine(_disks[0].RootPath, ".means.sys", "meta"),
                 cancellationToken,
                 _options.MetaSyncMode);
-            if (await Db.GetJsonAsync<XlAccessKeyRecord>(Keys.AccessKey(_options.DefaultAccessKey), cancellationToken) is null)
-            {
-                await Db.PutJsonAsync(
-                    Keys.AccessKey(_options.DefaultAccessKey),
-                    new XlAccessKeyRecord(_options.DefaultAccessKey, _options.DefaultSecretKey, true, DateTimeOffset.UtcNow),
-                    cancellationToken);
-            }
+            await EnsureBootstrapAccessKeyAsync(cancellationToken);
 
             _initialized = true;
         }
         finally
         {
             _initLock.Release();
+        }
+    }
+
+    private async Task EnsureBootstrapAccessKeyAsync(CancellationToken cancellationToken)
+    {
+        var accessKey = string.IsNullOrWhiteSpace(_options.DefaultAccessKey)
+            ? "meansadmin"
+            : _options.DefaultAccessKey.Trim();
+        var secretKey = string.IsNullOrWhiteSpace(_options.DefaultSecretKey)
+            ? "meansadminsecret"
+            : _options.DefaultSecretKey;
+        var existing = await Db.GetJsonAsync<XlAccessKeyRecord>(Keys.AccessKey(accessKey), cancellationToken);
+        if (existing is null)
+        {
+            // Only seed the configured bootstrap key when the deployment has no access keys yet.
+            // If operators deleted the bootstrap key after creating another key, do not recreate it.
+            var existingKeys = await Db.ScanPrefixAsync(Keys.AccessKeyPrefix, 1, null, cancellationToken);
+            if (existingKeys.Count > 0)
+            {
+                return;
+            }
+
+            await Db.PutJsonAsync(
+                Keys.AccessKey(accessKey),
+                new XlAccessKeyRecord(accessKey, secretKey, true, DateTimeOffset.UtcNow),
+                cancellationToken);
+            return;
+        }
+
+        // Configured DefaultSecretKey is the operator bootstrap secret.
+        // Re-apply it on every startup so compose/env overrides take effect without wiping volumes.
+        // Preserve Enabled/Policy so console disable/delete workflows remain durable across restarts.
+        if (!string.Equals(existing.SecretKey, secretKey, StringComparison.Ordinal))
+        {
+            await Db.PutJsonAsync(
+                Keys.AccessKey(accessKey),
+                existing with { SecretKey = secretKey },
+                cancellationToken);
         }
     }
 

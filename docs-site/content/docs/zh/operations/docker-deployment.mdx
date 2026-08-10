@@ -30,3 +30,12 @@ http://localhost:5178
 ## 升级
 
 升级前备份数据目录和元数据快照。升级后检查 `/metrics`、Console Health 页面和后台任务状态。
+
+
+## Bootstrap 凭证
+
+- 推荐使用宿主机环境变量或根目录 `.env`：`MEANS_ACCESS_KEY`、`MEANS_SECRET_KEY`。
+- Compose 的 `${MEANS_SECRET_KEY:-...}` 不会读取同一 `environment:` 块中的其他键。
+- 修改 `Means__Storage__DefaultSecretKey` 并重建容器后，bootstrap secret 会同步到元数据，无需清空 persistent volume。
+- 在至少还有一把已启用密钥时，Console 可以禁用/删除 bootstrap AccessKey。
+

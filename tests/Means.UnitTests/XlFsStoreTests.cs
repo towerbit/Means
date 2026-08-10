@@ -1332,13 +1332,100 @@ public sealed class XlFsStoreTests
         }
     }
 
+
+    [Fact]
+    public async Task BootstrapAccessKeySecretIsReappliedOnRestart()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using (var store = CreateStore(root, defaultAccessKey: "meansadmin", defaultSecretKey: "old-secret"))
+            {
+                var credential = await store.GetCredentialAsync("meansadmin", CancellationToken.None);
+                Assert.NotNull(credential);
+                Assert.Equal("old-secret", credential.SecretKey);
+                Assert.True(credential.Enabled);
+            }
+
+            await using var restarted = CreateStore(root, defaultAccessKey: "meansadmin", defaultSecretKey: "new-secret");
+            var updated = await restarted.GetCredentialAsync("meansadmin", CancellationToken.None);
+            Assert.NotNull(updated);
+            Assert.Equal("new-secret", updated.SecretKey);
+            Assert.True(updated.Enabled);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task BootstrapAccessKeyCanBeDeletedAfterAnotherEnabledKeyExists()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using var store = CreateStore(root, defaultAccessKey: "meansadmin", defaultSecretKey: "meansadminsecret");
+            await store.InitializeAsync(CancellationToken.None);
+
+            var onlyBootstrap = await Assert.ThrowsAsync<MeansException>(() =>
+                store.DeleteAccessKeyAsync("meansadmin", CancellationToken.None));
+            Assert.Equal(400, onlyBootstrap.StatusCode);
+
+            var created = await store.CreateAccessKeyAsync("ops-key", null, CancellationToken.None);
+            Assert.Equal("ops-key", created.AccessKey);
+
+            await store.DeleteAccessKeyAsync("meansadmin", CancellationToken.None);
+            Assert.Null(await store.GetCredentialAsync("meansadmin", CancellationToken.None));
+
+            var remaining = await store.ListAccessKeysAsync(CancellationToken.None);
+            Assert.Contains(remaining, key => key.AccessKey == "ops-key" && key.Enabled);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task AccessKeyCanBeDisabledAndReEnabled()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using var store = CreateStore(root, defaultAccessKey: "meansadmin", defaultSecretKey: "meansadminsecret");
+            await store.InitializeAsync(CancellationToken.None);
+            await store.CreateAccessKeyAsync("ops-key", null, CancellationToken.None);
+
+            await store.SetAccessKeyEnabledAsync("meansadmin", enabled: false, CancellationToken.None);
+            var disabled = await store.GetCredentialAsync("meansadmin", CancellationToken.None);
+            Assert.NotNull(disabled);
+            Assert.False(disabled.Enabled);
+
+            var lastEnabled = await Assert.ThrowsAsync<MeansException>(() =>
+                store.SetAccessKeyEnabledAsync("ops-key", enabled: false, CancellationToken.None));
+            Assert.Equal(400, lastEnabled.StatusCode);
+
+            await store.SetAccessKeyEnabledAsync("meansadmin", enabled: true, CancellationToken.None);
+            var enabled = await store.GetCredentialAsync("meansadmin", CancellationToken.None);
+            Assert.NotNull(enabled);
+            Assert.True(enabled.Enabled);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
     private static XlFsStore CreateStore(
         string root,
         IObjectPlacementPlanner? placementPlanner = null,
         IClusterShardTransport? shardTransport = null,
         int replicaRepairMaxAttempts = 5,
         int erasureDataShards = 2,
-        int erasureParityShards = 1)
+        int erasureParityShards = 1,
+        string defaultAccessKey = "meansadmin",
+        string defaultSecretKey = "meansadminsecret")
     {
         var options = Options.Create(new XlFsOptions
         {
@@ -1355,8 +1442,8 @@ public sealed class XlFsStoreTests
             ErasureParityShards = erasureParityShards,
             WriteQuorum = 2,
             ReadQuorum = 1,
-            DefaultAccessKey = "meansadmin",
-            DefaultSecretKey = "meansadminsecret",
+            DefaultAccessKey = defaultAccessKey,
+            DefaultSecretKey = defaultSecretKey,
             ReplicaRepairMaxAttempts = replicaRepairMaxAttempts
         });
         return placementPlanner is null && shardTransport is null

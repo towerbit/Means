@@ -37,3 +37,17 @@ http://localhost:5178/s3/{bucket}/{key}
 ## Note
 
 Production deployments must override the default Console password and default AccessKey/SecretKey. See [Multi-node Experimental Topology](../operations/multinode-topology) for the lab topology.
+
+
+## Override credentials
+
+Compose interpolates `MEANS_ACCESS_KEY` / `MEANS_SECRET_KEY` from the host environment or a root `.env` file. Setting only a sibling key inside the Compose `environment:` block does **not** feed `${MEANS_SECRET_KEY}`.
+
+```bash
+export MEANS_ACCESS_KEY=meansadmin
+export MEANS_SECRET_KEY='your-strong-secret'
+docker compose up -d --force-recreate
+```
+
+Means reapplies the configured bootstrap secret on every startup. You do **not** need to delete persistent volumes to rotate `DefaultSecretKey`. To remove the bootstrap AccessKey (`meansadmin`), create another enabled key in the Console first, then delete or disable it.
+

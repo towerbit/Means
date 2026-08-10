@@ -51,6 +51,8 @@ public interface IConsoleStore
 
     Task DeleteAccessKeyAsync(string accessKey, CancellationToken cancellationToken);
 
+    Task SetAccessKeyEnabledAsync(string accessKey, bool enabled, CancellationToken cancellationToken);
+
     Task<string?> GetAccessKeyPolicyAsync(string accessKey, CancellationToken cancellationToken);
 
     Task PutAccessKeyPolicyAsync(string accessKey, string policyJson, CancellationToken cancellationToken);

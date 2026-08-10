@@ -901,6 +901,51 @@ public sealed class ConsoleApiTests
         return response.Headers.ETag?.Tag.Trim('"') ?? "";
     }
 
+    
+    [Fact]
+    public async Task BootstrapAccessKeyCanBeManagedFromConsole()
+    {
+        await using var factory = new MeansWebApplicationFactory(new Dictionary<string, string?>
+        {
+            ["Means:Storage:DefaultAccessKey"] = "meansadmin",
+            ["Means:Storage:DefaultSecretKey"] = "rotated-secret"
+        });
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var login = await client.PostAsJsonAsync("/api/console/auth/login", new LoginRequest("admin", "meansadmin"));
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+
+        // Configured bootstrap secret is applied on startup without wiping volumes.
+        var bootstrapCredentials = new SigV4SigningCredentials("meansadmin", "rotated-secret");
+        var signedList = new HttpRequestMessage(HttpMethod.Get, "https://localhost/s3/");
+        SigV4RequestSigner.Sign(signedList, bootstrapCredentials, now: new DateTimeOffset(2026, 5, 8, 0, 0, 0, TimeSpan.Zero));
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(signedList)).StatusCode);
+
+        var createSecondary = await client.PostAsJsonAsync("/api/console/access-keys", new AccessKeyRequest("secondary-admin"));
+        Assert.Equal(HttpStatusCode.Created, createSecondary.StatusCode);
+
+        var disableBootstrap = await client.PutAsJsonAsync(
+            "/api/console/access-keys/meansadmin/status",
+            new AccessKeyStatusRequest(false));
+        Assert.Equal(HttpStatusCode.NoContent, disableBootstrap.StatusCode);
+
+        var signedWhileDisabled = new HttpRequestMessage(HttpMethod.Get, "https://localhost/s3/");
+        SigV4RequestSigner.Sign(signedWhileDisabled, bootstrapCredentials, now: new DateTimeOffset(2026, 5, 8, 0, 0, 0, TimeSpan.Zero));
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(signedWhileDisabled)).StatusCode);
+
+        var deleteBootstrap = await client.DeleteAsync("/api/console/access-keys/meansadmin");
+        Assert.Equal(HttpStatusCode.NoContent, deleteBootstrap.StatusCode);
+
+        var listKeys = await client.GetAsync("/api/console/access-keys");
+        Assert.Equal(HttpStatusCode.OK, listKeys.StatusCode);
+        var listJson = await listKeys.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("meansadmin", listJson);
+        Assert.Contains("secondary-admin", listJson);
+    }
+
     private sealed class MeansWebApplicationFactory : WebApplicationFactory<Program>
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "means-tests", Guid.NewGuid().ToString("N"));
@@ -1039,6 +1084,8 @@ public sealed class ConsoleApiTests
     private sealed record PolicyRequest(string Policy);
 
     private sealed record AccessKeyRequest(string AccessKey, string? Policy = null);
+
+    private sealed record AccessKeyStatusRequest(bool Enabled);
 
     private sealed record AccessKeySecretResponse(
         string AccessKey,

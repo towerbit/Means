@@ -42,3 +42,8 @@ Means 配置位于 `src/Means/appsettings.json`，也可通过环境变量覆盖
 ## Console and Telemetry
 
 Replace `Means:Console:AdminUser`, `Means:Console:AdminPassword`, `Means:Storage:DefaultAccessKey`, and `Means:Storage:DefaultSecretKey` before production use. Enable OpenTelemetry with `Means:Telemetry:Enabled=true` and set `Means:Telemetry:OtlpEndpoint` when exporting traces.
+
+## Bootstrap Access Key
+
+`Means:Storage:DefaultAccessKey` / `DefaultSecretKey`（或 Compose 的 `MEANS_ACCESS_KEY` / `MEANS_SECRET_KEY`）是运维引导凭证。Compose 从宿主机/`.env` 插值这些变量，而不是从 Compose 文件中的兄弟键。Secret 变更在容器重建后生效，无需清空数据卷。当还存在其他已启用密钥时，Console 可以禁用或删除 bootstrap key。
+

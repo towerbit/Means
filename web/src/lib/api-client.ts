@@ -755,6 +755,11 @@ export const api = {
     request<void>(`/api/console/access-keys/${encodeURIComponent(accessKey)}`, {
       method: "DELETE",
     }),
+  setAccessKeyEnabled: (accessKey: string, enabled: boolean) =>
+    request<void>(`/api/console/access-keys/${encodeURIComponent(accessKey)}/status`, {
+      method: "PUT",
+      body: { enabled },
+    }),
   getAccessKeyPolicy: (accessKey: string) =>
     request<PolicyResponse>(
       `/api/console/access-keys/${encodeURIComponent(accessKey)}/policy`

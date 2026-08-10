@@ -30,8 +30,8 @@ SDK endpoint 应指向数据面。例如同源 alias 部署时使用 `https://ho
 | `Means:Storage:PlacementMinFaultDomains` | `0` | 单个对象放置要求覆盖的最小故障域数量；`0` 表示只偏好跨故障域，不强制 |
 | `Means:Storage:HotObjectCacheMaxBytes` | `67108864` | 热点小对象缓存总预算 |
 | `Means:Storage:HotObjectCacheMaxObjectBytes` | `1048576` | 单个可缓存对象上限 |
-| `Means:Storage:DefaultAccessKey` | `meansadmin` | 初始 S3 access key |
-| `Means:Storage:DefaultSecretKey` | `meansadminsecret` | 初始 S3 secret key |
+| `Means:Storage:DefaultAccessKey` | `meansadmin` | 启动时用于引导的 S3 access key；仅在部署尚无任何 access key 时创建 |
+| `Means:Storage:DefaultSecretKey` | `meansadminsecret` | 启动时用于引导的 S3 secret key；每次启动都会同步到已存在的同名 bootstrap key（无需清空数据卷） |
 
 ## 维护任务配置
 
@@ -122,3 +122,25 @@ Means__Storage__DefaultSecretKey=change-me-too
 Means__S3__ServiceHost=s3.example.com
 Means__S3__DomainSuffix=objects.example.com
 ```
+
+
+## Bootstrap Access Key 行为
+
+- Compose 中的 `${MEANS_SECRET_KEY:-...}` 只从**宿主机环境变量 / `.env` 文件**插值，不会读取 `environment:` 块里同名的兄弟变量。
+- 推荐写法：
+
+```bash
+export MEANS_ACCESS_KEY=meansadmin
+export MEANS_SECRET_KEY='your-strong-secret'
+docker compose up -d
+```
+
+或在仓库根目录创建 `.env`：
+
+```env
+MEANS_ACCESS_KEY=meansadmin
+MEANS_SECRET_KEY=your-strong-secret
+```
+
+- 修改 `Means__Storage__DefaultSecretKey` / `MEANS_SECRET_KEY` 后，执行 `docker compose up -d`（必要时 `docker compose up -d --force-recreate`）即可生效，**不必**删除 persistent volume。
+- 控制台可以禁用或删除 bootstrap access key，但系统至少保留一把已启用的 access key。若要移除 `meansadmin`，请先创建另一把密钥。

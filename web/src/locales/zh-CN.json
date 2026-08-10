@@ -119,7 +119,9 @@
     "actions": {
       "create": "创建访问密钥",
       "creating": "创建中...",
-      "editPolicy": "编辑策略"
+      "editPolicy": "编辑策略",
+      "disable": "禁用访问密钥",
+      "enable": "启用访问密钥"
     },
     "deleteDialog": {
       "description": "删除访问密钥后，使用该密钥的 S3 请求将无法继续认证。",
@@ -130,7 +132,8 @@
       "deleteFailed": "删除访问密钥失败",
       "loadFailed": "加载访问密钥失败",
       "policySaveFailed": "保存访问密钥策略失败",
-      "policyDeleteFailed": "删除访问密钥策略失败"
+      "policyDeleteFailed": "删除访问密钥策略失败",
+      "statusFailed": "更新访问密钥状态失败"
     },
     "form": {
       "customAccessKeyLabel": "自定义 Access Key（可选）",
@@ -164,7 +167,9 @@
     "toast": {
       "deleted": "访问密钥已删除",
       "policySaved": "访问密钥策略已保存",
-      "policyDeleted": "访问密钥策略已删除"
+      "policyDeleted": "访问密钥策略已删除",
+      "disabled": "访问密钥已禁用",
+      "enabled": "访问密钥已启用"
     },
     "policyDialog": {
       "title": "访问密钥策略",

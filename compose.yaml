@@ -1,4 +1,4 @@
-name: means-single
+﻿name: means-single
 
 services:
   means:
@@ -33,6 +33,10 @@ services:
       Means__Storage__ReadQuorum: "1"
       Means__Storage__MetaSyncMode: "${MEANS_META_SYNC_MODE:-Always}"
       Means__Storage__VerifyChecksumOnRead: "${MEANS_VERIFY_CHECKSUM_ON_READ:-false}"
+      # Bootstrap S3 credentials. Prefer host env MEANS_ACCESS_KEY / MEANS_SECRET_KEY.
+      # Compose only interpolates ${...} from the host/.env — not from sibling keys in this block.
+      # On every startup Means re-applies these values to the bootstrap access key metadata,
+      # so changing them and recreating the container takes effect without wiping volumes.
       Means__Storage__DefaultAccessKey: "${MEANS_ACCESS_KEY:-meansadmin}"
       Means__Storage__DefaultSecretKey: "${MEANS_SECRET_KEY:-meansadmin-local-secret}"
       Means__Storage__MultipartUploadCleanupAgeHours: "24"

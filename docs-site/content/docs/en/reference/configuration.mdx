@@ -42,3 +42,8 @@ Means configuration lives in `src/Means/appsettings.json` and can be overridden 
 ## Console and Telemetry
 
 Replace `Means:Console:AdminUser`, `Means:Console:AdminPassword`, `Means:Storage:DefaultAccessKey`, and `Means:Storage:DefaultSecretKey` before production use. Enable OpenTelemetry with `Means:Telemetry:Enabled=true` and set `Means:Telemetry:OtlpEndpoint` when exporting traces.
+
+## Bootstrap access key
+
+`Means:Storage:DefaultAccessKey` / `DefaultSecretKey` (or Compose `MEANS_ACCESS_KEY` / `MEANS_SECRET_KEY`) are operator bootstrap credentials. Compose interpolates those variables from the host/`.env`, not from sibling keys in the Compose file. Secret changes take effect on container recreate without wiping volumes. The Console may disable or delete the bootstrap key once another enabled key exists.
+

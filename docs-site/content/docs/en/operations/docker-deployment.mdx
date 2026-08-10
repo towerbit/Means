@@ -30,3 +30,12 @@ At minimum, production should override:
 ## Upgrade
 
 Before upgrading, back up data directories and metadata snapshots. After upgrading, check `/metrics`, the Console Health page, and background task state.
+
+
+## Bootstrap credentials
+
+- Prefer host env or root `.env`: `MEANS_ACCESS_KEY`, `MEANS_SECRET_KEY`.
+- Compose `${MEANS_SECRET_KEY:-...}` does not read other keys from the same `environment:` block.
+- Changing `Means__Storage__DefaultSecretKey` and recreating the container updates the bootstrap secret in metadata. Persistent volumes do not need to be wiped.
+- The Console can disable/delete the bootstrap AccessKey after at least one other enabled key exists.
+

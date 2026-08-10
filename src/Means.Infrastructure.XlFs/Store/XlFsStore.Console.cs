@@ -531,12 +531,57 @@ public sealed partial class XlFsStore
     public async Task DeleteAccessKeyAsync(string accessKey, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
-        if (string.Equals(accessKey, _options.DefaultAccessKey, StringComparison.Ordinal))
+        var key = accessKey.Trim();
+        var existing = await Db.GetJsonAsync<XlAccessKeyRecord>(Keys.AccessKey(key), cancellationToken)
+            ?? throw new MeansException(MeansErrorCodes.InvalidArgument, "Access key does not exist.", 404);
+
+        await EnsureNotLastEnabledAccessKeyAsync(key, existing.Enabled, intendedEnabled: false, cancellationToken);
+        await Db.PutBatchAsync([new LogDbMutation(Keys.AccessKey(key), null, true)], cancellationToken);
+    }
+
+    public async Task SetAccessKeyEnabledAsync(string accessKey, bool enabled, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        var key = accessKey.Trim();
+        var existing = await Db.GetJsonAsync<XlAccessKeyRecord>(Keys.AccessKey(key), cancellationToken)
+            ?? throw new MeansException(MeansErrorCodes.InvalidArgument, "Access key does not exist.", 404);
+
+        if (existing.Enabled == enabled)
         {
-            throw new MeansException(MeansErrorCodes.InvalidArgument, "The bootstrap access key cannot be deleted from the console.", 400);
+            return;
         }
 
-        await Db.PutBatchAsync([new LogDbMutation(Keys.AccessKey(accessKey), null, true)], cancellationToken);
+        await EnsureNotLastEnabledAccessKeyAsync(key, existing.Enabled, intendedEnabled: enabled, cancellationToken);
+        await Db.PutJsonAsync(
+            Keys.AccessKey(key),
+            existing with { Enabled = enabled },
+            cancellationToken);
+    }
+
+    private async Task EnsureNotLastEnabledAccessKeyAsync(
+        string accessKey,
+        bool currentlyEnabled,
+        bool intendedEnabled,
+        CancellationToken cancellationToken)
+    {
+        if (!currentlyEnabled || intendedEnabled)
+        {
+            return;
+        }
+
+        var rows = await Db.ScanPrefixAsync(Keys.AccessKeyPrefix, 100_000, null, cancellationToken);
+        var otherEnabledExists = rows
+            .Select(row => Deserialize<XlAccessKeyRecord>(row.Value))
+            .Any(record =>
+                record.Enabled
+                && !string.Equals(record.AccessKey, accessKey, StringComparison.Ordinal));
+        if (!otherEnabledExists)
+        {
+            throw new MeansException(
+                MeansErrorCodes.InvalidArgument,
+                "At least one enabled access key must remain. Create or enable another key first.",
+                400);
+        }
     }
 
     public async Task<string?> GetAccessKeyPolicyAsync(string accessKey, CancellationToken cancellationToken)

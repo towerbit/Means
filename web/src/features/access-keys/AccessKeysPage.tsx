@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useState } from "react"
-import { FileJsonIcon, KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { BanIcon, CheckCircle2Icon, FileJsonIcon, KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
 import { AccessKeyDialog } from "@/components/domain/AccessKeyDialog"
@@ -92,6 +92,18 @@ export function AccessKeysPage() {
       await load()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("accessKeys.errors.deleteFailed"))
+    }
+  }
+
+  const toggleEnabled = async (key: AccessKeyInfo) => {
+    try {
+      await api.setAccessKeyEnabled(key.accessKey, !key.enabled)
+      toast.success(
+        key.enabled ? t("accessKeys.toast.disabled") : t("accessKeys.toast.enabled")
+      )
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("accessKeys.errors.statusFailed"))
     }
   }
 
@@ -206,6 +218,18 @@ export function AccessKeysPage() {
                 <TableCell className="text-muted-foreground">{formatDateTime(key.createdAt)}</TableCell>
                 <TableCell>
                   <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => void toggleEnabled(key)}
+                    >
+                      {key.enabled ? <BanIcon /> : <CheckCircle2Icon />}
+                      <span className="sr-only">
+                        {key.enabled
+                          ? t("accessKeys.actions.disable")
+                          : t("accessKeys.actions.enable")}
+                      </span>
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon-sm"

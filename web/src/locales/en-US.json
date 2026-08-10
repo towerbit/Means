@@ -119,7 +119,9 @@
     "actions": {
       "create": "Create access key",
       "creating": "Creating...",
-      "editPolicy": "Edit policy"
+      "editPolicy": "Edit policy",
+      "disable": "Disable access key",
+      "enable": "Enable access key"
     },
     "deleteDialog": {
       "description": "After deletion, S3 requests using this key will no longer authenticate.",
@@ -130,7 +132,8 @@
       "deleteFailed": "Failed to delete access key",
       "loadFailed": "Failed to load access keys",
       "policySaveFailed": "Failed to save access key policy",
-      "policyDeleteFailed": "Failed to delete access key policy"
+      "policyDeleteFailed": "Failed to delete access key policy",
+      "statusFailed": "Failed to update access key status"
     },
     "form": {
       "customAccessKeyLabel": "Custom Access Key (optional)",
@@ -164,7 +167,9 @@
     "toast": {
       "deleted": "Access key deleted",
       "policySaved": "Access key policy saved",
-      "policyDeleted": "Access key policy deleted"
+      "policyDeleted": "Access key policy deleted",
+      "disabled": "Access key disabled",
+      "enabled": "Access key enabled"
     },
     "policyDialog": {
       "title": "Access key policy",
