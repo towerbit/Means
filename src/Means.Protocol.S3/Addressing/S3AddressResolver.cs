@@ -23,11 +23,14 @@ public static class S3AddressResolver
             }
         }
 
+        // AWS SDKs commonly issue bucket operations as "/{bucket}/" (trailing slash) and may
+        // produce an extra slash after a path-style ServiceURL that already ends with '/'.
+        // Collapse only leading duplicate slashes so "/s3//bucket/" still resolves as a bucket.
         var trimmedPath = path.TrimStart('/');
 
         if (IsVirtualHostedHost(host, options, out var bucketFromHost))
         {
-            return new S3Address(bucketFromHost, string.IsNullOrEmpty(trimmedPath) ? null : Uri.UnescapeDataString(trimmedPath), true);
+            return new S3Address(bucketFromHost, NormalizeObjectKey(trimmedPath), true);
         }
 
         if (string.IsNullOrEmpty(trimmedPath))
@@ -42,8 +45,23 @@ public static class S3AddressResolver
         }
 
         var bucket = Uri.UnescapeDataString(trimmedPath[..slash]);
-        var key = Uri.UnescapeDataString(trimmedPath[(slash + 1)..]);
+        var key = NormalizeObjectKey(trimmedPath[(slash + 1)..]);
         return new S3Address(bucket, key, false);
+    }
+
+    /// <summary>
+    /// Treats a missing or empty path segment as "no object key".
+    /// A trailing slash after the bucket name is a bucket-level request in S3 clients, not an empty key.
+    /// </summary>
+    private static string? NormalizeObjectKey(string? pathSegment)
+    {
+        if (string.IsNullOrEmpty(pathSegment))
+        {
+            return null;
+        }
+
+        var key = Uri.UnescapeDataString(pathSegment);
+        return string.IsNullOrEmpty(key) ? null : key;
     }
 
     private static bool IsVirtualHostedHost(string host, S3AddressingOptions options, out string bucket)

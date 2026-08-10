@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed AWS S3 SDK `PutBucket` against path-style endpoints: trailing-slash paths such as `PUT /bucket/` and `PUT /s3//bucket/` are now treated as bucket operations instead of empty object keys (`Invalid bucket name.`).
 - Added access-key-level IAM-style policy support for S3 authorization, Console management APIs, and console UI.
 - Documented access-key policy evaluation order and Principal optional semantics in the SDK contract.
 

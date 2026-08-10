@@ -1,4 +1,4 @@
-﻿using Means.Core;
+using Means.Core;
 using Means.Protocol.S3;
 using Microsoft.AspNetCore.Http;
 
@@ -31,6 +31,39 @@ public sealed class AddressingAndPolicyTests
 
         Assert.Equal("photos", address.BucketName);
         Assert.Equal("2026/cat.jpg", address.ObjectKey);
+        Assert.True(address.IsVirtualHostedStyle);
+    }
+
+    [Theory]
+    [InlineData("/newbucket")]
+    [InlineData("/newbucket/")]
+    [InlineData("/s3/newbucket")]
+    [InlineData("/s3/newbucket/")]
+    [InlineData("/s3//newbucket/")]
+    public void ResolvesAwsSdkStyleBucketPathsAsBucketOperations(string path)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Host = new HostString("localhost");
+        context.Request.Path = path;
+
+        var address = S3AddressResolver.Resolve(context.Request, new S3AddressingOptions());
+
+        Assert.Equal("newbucket", address.BucketName);
+        Assert.Null(address.ObjectKey);
+        Assert.False(address.IsVirtualHostedStyle);
+    }
+
+    [Fact]
+    public void ResolvesVirtualHostedTrailingSlashAsBucketOperation()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Host = new HostString("photos.means.local");
+        context.Request.Path = "/";
+
+        var address = S3AddressResolver.Resolve(context.Request, new S3AddressingOptions());
+
+        Assert.Equal("photos", address.BucketName);
+        Assert.Null(address.ObjectKey);
         Assert.True(address.IsVirtualHostedStyle);
     }
 

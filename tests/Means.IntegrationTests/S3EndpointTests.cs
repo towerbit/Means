@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,6 +12,38 @@ namespace Means.IntegrationTests;
 
 public sealed class S3EndpointTests
 {
+    [Fact]
+    public async Task CreateBucketAcceptsAwsSdkTrailingSlashPaths()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+
+        // AWS SDK for .NET path-style PutBucket issues PUT /{bucket}/ and, when ServiceURL
+        // already ends with a slash (for example http://host/s3/), PUT /s3//{bucket}/.
+        var pathStyle = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/newbucket/"),
+            credentials);
+        Assert.Equal(HttpStatusCode.OK, pathStyle.StatusCode);
+
+        var aliasStyle = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/s3//sdk-bucket/"),
+            credentials);
+        Assert.Equal(HttpStatusCode.OK, aliasStyle.StatusCode);
+
+        var head = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Head, "https://api.means.local/s3/sdk-bucket/"),
+            credentials);
+        Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+    }
+
     [Fact]
     public async Task BucketAndObjectLifecycleWorksAcrossAddressingStyles()
     {
@@ -130,9 +162,10 @@ public sealed class S3EndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, invalidBucket.StatusCode);
         Assert.Contains("<Code>InvalidArgument</Code>", await invalidBucket.Content.ReadAsStringAsync());
 
-        var invalidKey = await client.GetAsync("https://api.means.local/valid-bucket/");
-        Assert.Equal(HttpStatusCode.BadRequest, invalidKey.StatusCode);
-        Assert.Contains("<Code>InvalidArgument</Code>", await invalidKey.Content.ReadAsStringAsync());
+        // Trailing slash is how AWS SDKs address a bucket; it must not be treated as an empty object key.
+        var trailingSlashBucket = await client.GetAsync("https://api.means.local/valid-bucket/");
+        Assert.Equal(HttpStatusCode.BadRequest, trailingSlashBucket.StatusCode);
+        Assert.Contains("<Code>InvalidRequest</Code>", await trailingSlashBucket.Content.ReadAsStringAsync());
 
         var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
         await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/ranges"), credentials);
