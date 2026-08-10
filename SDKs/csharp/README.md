@@ -185,10 +185,23 @@ var versionedGet = client.CreatePresignedGetUrl(
     versionId: "object-version-id",
     expires: TimeSpan.FromMinutes(15));
 
+// Sign response overrides into the URL (do not append them after signing).
+var downloadGet = client.CreatePresignedGetUrl(
+    "photos",
+    "2026/image.jpg",
+    TimeSpan.FromMinutes(15),
+    new PresignedGetUrlOptions
+    {
+        ResponseContentDisposition = "attachment; filename=\"holiday.jpg\"",
+        ResponseContentType = "image/jpeg"
+    });
+
 Console.WriteLine(presignedGet.Url);
+Console.WriteLine(downloadGet.Url);
 ```
 
 SigV4 presigned URLs require credentials and support expirations up to seven days.
+`response-content-disposition` and other `response-*` overrides must be included when creating the URL so they are part of the signature.
 
 ## Error handling
 

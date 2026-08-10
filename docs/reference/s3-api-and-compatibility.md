@@ -35,7 +35,7 @@ SigV4 默认 region 为 `us-east-1`，service 为 `s3`。预签名 URL 最大有
 | DeleteBucket | 支持 | 非空 bucket 返回 `BucketNotEmpty` |
 | ListObjectsV2 | 支持 | `prefix`、`delimiter`、`continuation-token`、`max-keys` |
 | PutObject | 支持 | metadata、content type、cache-control、content-disposition |
-| GetObject | 支持 | Range、压缩、versionId |
+| GetObject | 支持 | Range、压缩、versionId、response-* 响应头覆盖 |
 | HeadObject | 支持 | metadata、versionId |
 | DeleteObject | 支持 | versioning 下写 delete marker 或永久删除指定版本 |
 | CopyObject | 支持 | `x-amz-copy-source`，`COPY`/`REPLACE` metadata directive |

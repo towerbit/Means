@@ -155,6 +155,63 @@ public sealed class S3EndpointTests
     }
 
     [Fact]
+    public async Task PresignedGetSupportsResponseContentDispositionOverride()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/download"), credentials);
+
+        var put = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/download/report.bin")
+        {
+            Content = new StringContent("download-me", Encoding.UTF8, "application/octet-stream")
+        };
+        var putResponse = await SendSignedAsync(client, put, credentials);
+        Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
+
+        var disposition = "attachment; filename=\"custom-report.bin\"";
+        var getUri = SigV4RequestSigner.Presign(
+            new Uri($"https://api.means.local/download/report.bin?response-content-disposition={Uri.EscapeDataString(disposition)}&response-content-type={Uri.EscapeDataString("text/plain")}"),
+            HttpMethod.Get,
+            credentials,
+            TimeSpan.FromMinutes(10));
+
+        var getResponse = await client.GetAsync(getUri);
+        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+        Assert.Equal("download-me", await getResponse.Content.ReadAsStringAsync());
+        var contentDisposition = getResponse.Content.Headers.ContentDisposition?.ToString();
+        if (contentDisposition is null
+            && getResponse.Headers.TryGetValues("Content-Disposition", out var dispositionValues))
+        {
+            contentDisposition = dispositionValues.FirstOrDefault();
+        }
+        if (contentDisposition is null
+            && getResponse.Content.Headers.TryGetValues("Content-Disposition", out var contentDispositionValues))
+        {
+            contentDisposition = contentDispositionValues.FirstOrDefault();
+        }
+        Assert.Contains("attachment", contentDisposition ?? "", StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("custom-report.bin", contentDisposition ?? "", StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("text/plain", getResponse.Content.Headers.ContentType?.MediaType);
+
+        // Appending response overrides after signing must fail signature verification.
+        var plainGetUri = SigV4RequestSigner.Presign(
+            new Uri("https://api.means.local/download/report.bin"),
+            HttpMethod.Get,
+            credentials,
+            TimeSpan.FromMinutes(10));
+        var tamperedUri = plainGetUri + "&response-content-disposition=" + Uri.EscapeDataString(disposition);
+        var tamperedResponse = await client.GetAsync(tamperedUri);
+        Assert.Equal(HttpStatusCode.Forbidden, tamperedResponse.StatusCode);
+        var tamperedBody = await tamperedResponse.Content.ReadAsStringAsync();
+        Assert.Contains("SignatureDoesNotMatch", tamperedBody);
+    }
+
+    [Fact]
     public async Task PresignedUrlRejectsWrongMethodAndExcessiveExpiration()
     {
         await using var factory = new MeansWebApplicationFactory();

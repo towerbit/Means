@@ -967,6 +967,17 @@ public sealed class MeansClient : IDisposable
     }
 
     /// <summary>
+    /// Creates a SigV4 presigned GET URL with optional response header overrides.
+    /// Override values are signed into the URL as S3 <c>response-*</c> query parameters
+    /// (for example <c>response-content-disposition</c> to customize the download filename).
+    /// Appending these parameters after signing will cause <c>SignatureDoesNotMatch</c>.
+    /// </summary>
+    public PresignedRequest CreatePresignedGetUrl(string bucketName, string key, TimeSpan expires, PresignedGetUrlOptions? options)
+    {
+        return CreatePresignedUrl(HttpMethod.Get, bucketName, key, expires, BuildPresignedGetQuery(options));
+    }
+
+    /// <summary>
     /// Creates a SigV4 presigned GET URL.
     /// </summary>
     public Task<PresignedRequest> CreatePresignedGetUrlAsync(
@@ -991,6 +1002,20 @@ public sealed class MeansClient : IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(CreatePresignedGetUrl(bucketName, key, versionId, expires));
+    }
+
+    /// <summary>
+    /// Creates a SigV4 presigned GET URL with optional response header overrides.
+    /// </summary>
+    public Task<PresignedRequest> CreatePresignedGetUrlAsync(
+        string bucketName,
+        string key,
+        TimeSpan expires,
+        PresignedGetUrlOptions? options,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(CreatePresignedGetUrl(bucketName, key, expires, options));
     }
 
     /// <summary>
@@ -1225,6 +1250,29 @@ public sealed class MeansClient : IDisposable
                 : "x-amz-meta-" + pair.Key;
             request.Headers.TryAddWithoutValidation(headerName, pair.Value ?? "");
         }
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, string>>? BuildPresignedGetQuery(PresignedGetUrlOptions? options)
+    {
+        if (options is null)
+        {
+            return null;
+        }
+
+        var query = new List<KeyValuePair<string, string>>();
+        AddQuery(query, "versionId", NullIfWhiteSpace(options.VersionId));
+        AddQuery(query, "response-content-type", NullIfWhiteSpace(options.ResponseContentType));
+        AddQuery(query, "response-content-language", NullIfWhiteSpace(options.ResponseContentLanguage));
+        AddQuery(query, "response-expires", NullIfWhiteSpace(options.ResponseExpires));
+        AddQuery(query, "response-cache-control", NullIfWhiteSpace(options.ResponseCacheControl));
+        AddQuery(query, "response-content-disposition", NullIfWhiteSpace(options.ResponseContentDisposition));
+        AddQuery(query, "response-content-encoding", NullIfWhiteSpace(options.ResponseContentEncoding));
+        return query.Count == 0 ? null : query;
+    }
+
+    private static string? NullIfWhiteSpace(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static IReadOnlyList<KeyValuePair<string, string>>? VersionQuery(string? versionId)

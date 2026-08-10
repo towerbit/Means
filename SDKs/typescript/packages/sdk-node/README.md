@@ -57,12 +57,23 @@ const versionedGetUrl = client.createPresignedGetUrl({
   expiresIn: 900
 });
 
+// Sign response overrides into the URL (do not append them after signing).
+const downloadUrl = client.createPresignedGetUrl({
+  bucket: "assets",
+  key: "app/main.js",
+  expiresIn: 900,
+  responseContentDisposition: 'attachment; filename="main.js"',
+  responseContentType: "application/javascript"
+});
+
 const putUrl = client.createPresignedPutUrl({
   bucket: "assets",
   key: "uploads/new-file.bin",
   expiresIn: 900
 });
 ```
+
+`responseContentDisposition` and other `response-*` overrides must be included when creating the URL so they are part of the signature.
 
 Multipart part URLs include `partNumber` and `uploadId` in the SigV4 signature:
 

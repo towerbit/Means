@@ -304,7 +304,16 @@ operations:
     path: "/{bucket}/{key}"
     query:
       versionId: optional
+      response-content-type: optional
+      response-content-language: optional
+      response-expires: optional
+      response-cache-control: optional
+      response-content-disposition: optional
+      response-content-encoding: optional
     auth: local-signing
+    notes: >
+      Response override query parameters must be signed into the URL.
+      Appending them after signing causes SignatureDoesNotMatch.
   createPresignedPutUrl:
     method: PUT
     path: "/{bucket}/{key}"

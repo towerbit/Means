@@ -22,3 +22,18 @@ http://localhost:5178/s3/{bucket}/{key}
 ```
 
 生产环境建议使用 path-style 或 virtual-hosted-style，并确保主机名、TLS 与签名 host 一致。
+
+## 响应头覆盖
+
+预签名 GET URL 可通过已签名的 `response-*` 查询参数覆盖响应头：
+
+- `response-content-type`
+- `response-content-language`
+- `response-expires`
+- `response-cache-control`
+- `response-content-disposition`
+- `response-content-encoding`
+
+这些参数必须在签名时一并写入 URL。签名后再追加会改变 canonical query，导致 `SignatureDoesNotMatch`。
+
+可用 `response-content-disposition` 自定义下载文件名，例如 `attachment; filename="report.pdf"`。

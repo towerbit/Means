@@ -22,3 +22,18 @@ http://localhost:5178/s3/{bucket}/{key}
 ```
 
 Production should use path-style or virtual-hosted-style addressing and keep hostname, TLS, and signing host aligned.
+
+## Response header overrides
+
+Presigned GET URLs can override response headers with signed `response-*` query parameters:
+
+- `response-content-type`
+- `response-content-language`
+- `response-expires`
+- `response-cache-control`
+- `response-content-disposition`
+- `response-content-encoding`
+
+These parameters must be present when the URL is signed. Appending them afterwards changes the canonical query string and results in `SignatureDoesNotMatch`.
+
+Use `response-content-disposition` to customize the download filename, for example `attachment; filename="report.pdf"`.

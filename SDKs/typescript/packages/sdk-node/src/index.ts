@@ -46,7 +46,26 @@ export interface NodePutObjectInput extends Omit<PutObjectInput, "body"> {
   body: NodeBodyPayload;
 }
 
-export interface PresignedObjectInput {
+export interface PresignedResponseOverrides {
+  /** Overrides response Content-Type via response-content-type. */
+  responseContentType?: string;
+  /** Overrides response Content-Language via response-content-language. */
+  responseContentLanguage?: string;
+  /** Overrides response Expires via response-expires. */
+  responseExpires?: string;
+  /** Overrides response Cache-Control via response-cache-control. */
+  responseCacheControl?: string;
+  /**
+   * Overrides response Content-Disposition via response-content-disposition.
+   * Use this to customize the download filename, e.g. `attachment; filename="report.pdf"`.
+   * Must be included when creating the presigned URL; appending after signing causes SignatureDoesNotMatch.
+   */
+  responseContentDisposition?: string;
+  /** Overrides response Content-Encoding via response-content-encoding. */
+  responseContentEncoding?: string;
+}
+
+export interface PresignedObjectInput extends PresignedResponseOverrides {
   bucket: string;
   key: string;
   versionId?: string;
@@ -62,7 +81,7 @@ export interface NodeUploadFileMultipartInput extends Omit<UploadObjectMultipart
   filePath: string;
 }
 
-export interface CreatePresignedObjectUrlOptions extends BuildObjectUrlOptions {
+export interface CreatePresignedObjectUrlOptions extends BuildObjectUrlOptions, PresignedResponseOverrides {
   credentials: MeansCredentials;
   region?: string;
   service?: string;
@@ -104,6 +123,7 @@ export class MeansNodeClient extends MeansClient {
   createPresignedGetUrl(input: PresignedObjectInput): string {
     const url = this.objectUrl(input.bucket, input.key);
     appendOptionalQuery(url, "versionId", input.versionId);
+    appendResponseOverrides(url, input);
     return this.sigV4Signer.presign(url, "GET", input.expiresIn).toString();
   }
 
@@ -345,6 +365,9 @@ function createPresignedObjectUrl(method: "GET" | "PUT", options: CreatePresigne
 
   const url = buildMeansObjectUrl(options);
   appendOptionalQuery(url, "versionId", method === "GET" ? options.versionId : undefined);
+  if (method === "GET") {
+    appendResponseOverrides(url, options);
+  }
   return signer.presign(url, method, options.expiresIn).toString();
 }
 
@@ -352,6 +375,15 @@ function appendOptionalQuery(url: URL, key: string, value: string | undefined): 
   if (value != null && value.length > 0) {
     url.searchParams.set(key, value);
   }
+}
+
+function appendResponseOverrides(url: URL, overrides: PresignedResponseOverrides): void {
+  appendOptionalQuery(url, "response-content-type", overrides.responseContentType);
+  appendOptionalQuery(url, "response-content-language", overrides.responseContentLanguage);
+  appendOptionalQuery(url, "response-expires", overrides.responseExpires);
+  appendOptionalQuery(url, "response-cache-control", overrides.responseCacheControl);
+  appendOptionalQuery(url, "response-content-disposition", overrides.responseContentDisposition);
+  appendOptionalQuery(url, "response-content-encoding", overrides.responseContentEncoding);
 }
 
 function buildCanonicalRequest(input: {

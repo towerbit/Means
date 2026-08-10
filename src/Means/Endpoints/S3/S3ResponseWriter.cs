@@ -178,11 +178,24 @@ internal static class S3ResponseWriter
 
     private static void WriteObjectHeaders(HttpContext context, ObjectInfo info, BucketSettings bucketSettings)
     {
-        context.Response.ContentType = info.ContentType;
+        // S3 response-content-* query overrides (commonly used with presigned GET URLs).
+        var overrideContentType = GetResponseOverride(context, "response-content-type");
+        var overrideContentLanguage = GetResponseOverride(context, "response-content-language");
+        var overrideExpires = GetResponseOverride(context, "response-expires");
+        var overrideCacheControl = GetResponseOverride(context, "response-cache-control");
+        var overrideContentDisposition = GetResponseOverride(context, "response-content-disposition");
+        var overrideContentEncoding = GetResponseOverride(context, "response-content-encoding");
+
+        context.Response.ContentType = overrideContentType ?? info.ContentType;
         context.Response.Headers.ETag = S3Xml.QuoteEtag(info.ETag);
         context.Response.Headers.LastModified = info.LastModified.UtcDateTime.ToString("R", CultureInfo.InvariantCulture);
         context.Response.Headers.AcceptRanges = "bytes";
-        if (!string.IsNullOrWhiteSpace(info.CacheControl))
+
+        if (!string.IsNullOrWhiteSpace(overrideCacheControl))
+        {
+            context.Response.Headers.CacheControl = overrideCacheControl;
+        }
+        else if (!string.IsNullOrWhiteSpace(info.CacheControl))
         {
             context.Response.Headers.CacheControl = info.CacheControl;
         }
@@ -191,7 +204,11 @@ internal static class S3ResponseWriter
             context.Response.Headers.CacheControl = defaultCacheControl;
         }
 
-        if (!string.IsNullOrWhiteSpace(info.ContentDisposition))
+        if (!string.IsNullOrWhiteSpace(overrideContentDisposition))
+        {
+            context.Response.Headers.ContentDisposition = overrideContentDisposition;
+        }
+        else if (!string.IsNullOrWhiteSpace(info.ContentDisposition))
         {
             context.Response.Headers.ContentDisposition = info.ContentDisposition;
         }
@@ -200,14 +217,27 @@ internal static class S3ResponseWriter
             context.Response.Headers.ContentDisposition = defaultContentDisposition;
         }
 
-        if (TryGetDefaultHeader(bucketSettings, "Content-Language", out var contentLanguage))
+        if (!string.IsNullOrWhiteSpace(overrideContentLanguage))
+        {
+            context.Response.Headers["Content-Language"] = overrideContentLanguage;
+        }
+        else if (TryGetDefaultHeader(bucketSettings, "Content-Language", out var contentLanguage))
         {
             context.Response.Headers["Content-Language"] = contentLanguage;
         }
 
-        if (TryGetDefaultHeader(bucketSettings, "Expires", out var expires))
+        if (!string.IsNullOrWhiteSpace(overrideExpires))
+        {
+            context.Response.Headers["Expires"] = overrideExpires;
+        }
+        else if (TryGetDefaultHeader(bucketSettings, "Expires", out var expires))
         {
             context.Response.Headers["Expires"] = expires;
+        }
+
+        if (!string.IsNullOrWhiteSpace(overrideContentEncoding))
+        {
+            context.Response.Headers.ContentEncoding = overrideContentEncoding;
         }
 
         var metadata = new Dictionary<string, string>(bucketSettings.DefaultMetadata, StringComparer.OrdinalIgnoreCase);
@@ -250,6 +280,13 @@ internal static class S3ResponseWriter
 
         return condition.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Any(candidate => string.Equals(candidate.Trim().Trim('"'), etag.Trim('"'), StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    private static string? GetResponseOverride(HttpContext context, string queryName)
+    {
+        var value = context.Request.Query[queryName].FirstOrDefault();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static bool TryGetDefaultHeader(BucketSettings settings, string headerName, out string value)

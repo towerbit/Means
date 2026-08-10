@@ -570,6 +570,49 @@ public sealed class ListMultipartUploadsOptions
 }
 
 /// <summary>
+/// Optional overrides for a presigned GET URL.
+/// Values are signed into the URL as S3 <c>response-*</c> query parameters.
+/// </summary>
+public sealed class PresignedGetUrlOptions
+{
+    /// <summary>
+    /// Optional object version id.
+    /// </summary>
+    public string? VersionId { get; set; }
+
+    /// <summary>
+    /// Overrides the response <c>Content-Type</c> header via <c>response-content-type</c>.
+    /// </summary>
+    public string? ResponseContentType { get; set; }
+
+    /// <summary>
+    /// Overrides the response <c>Content-Language</c> header via <c>response-content-language</c>.
+    /// </summary>
+    public string? ResponseContentLanguage { get; set; }
+
+    /// <summary>
+    /// Overrides the response <c>Expires</c> header via <c>response-expires</c>.
+    /// </summary>
+    public string? ResponseExpires { get; set; }
+
+    /// <summary>
+    /// Overrides the response <c>Cache-Control</c> header via <c>response-cache-control</c>.
+    /// </summary>
+    public string? ResponseCacheControl { get; set; }
+
+    /// <summary>
+    /// Overrides the response <c>Content-Disposition</c> header via <c>response-content-disposition</c>.
+    /// Use this to customize the download filename, e.g. <c>attachment; filename="report.pdf"</c>.
+    /// </summary>
+    public string? ResponseContentDisposition { get; set; }
+
+    /// <summary>
+    /// Overrides the response <c>Content-Encoding</c> header via <c>response-content-encoding</c>.
+    /// </summary>
+    public string? ResponseContentEncoding { get; set; }
+}
+
+/// <summary>
 /// SigV4 presigned request information.
 /// </summary>
 public sealed class PresignedRequest
