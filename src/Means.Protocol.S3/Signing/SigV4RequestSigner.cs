@@ -11,7 +11,13 @@ namespace Means.Protocol.S3;
 /// </summary>
 public static class SigV4RequestSigner
 {
-    public static void Sign(HttpRequestMessage request, SigV4SigningCredentials credentials, string region = "us-east-1", string service = "s3", DateTimeOffset? now = null)
+    public static void Sign(
+        HttpRequestMessage request,
+        SigV4SigningCredentials credentials,
+        string region = "us-east-1",
+        string service = "s3",
+        DateTimeOffset? now = null,
+        string payloadHash = "UNSIGNED-PAYLOAD")
     {
         if (request.RequestUri is null)
         {
@@ -24,7 +30,7 @@ public static class SigV4RequestSigner
         request.Headers.Remove("x-amz-date");
         request.Headers.TryAddWithoutValidation("x-amz-date", amzDate);
         request.Headers.Remove("x-amz-content-sha256");
-        request.Headers.TryAddWithoutValidation("x-amz-content-sha256", "UNSIGNED-PAYLOAD");
+        request.Headers.TryAddWithoutValidation("x-amz-content-sha256", payloadHash);
 
         var signedHeaders = "host;x-amz-content-sha256;x-amz-date";
         var headers = BuildHeaderLookup(request);
@@ -35,7 +41,7 @@ public static class SigV4RequestSigner
             query,
             headers,
             signedHeaders,
-            "UNSIGNED-PAYLOAD",
+            payloadHash,
             includeSignature: true);
 
         var scope = new SigV4CredentialScope(credentials.AccessKey, date, region, service);

@@ -145,7 +145,8 @@ internal static class S3ObjectEndpoint
         await authorizer.AuthorizeAsync(context, S3Actions.PutObject, bucketName, key, requireAuthenticated: false, cancellationToken);
         var uploadId = S3RequestParser.ParseUploadId(context.Request.Query["uploadId"].FirstOrDefault());
         var partNumber = S3RequestParser.ParsePartNumber(context.Request.Query["partNumber"].FirstOrDefault());
-        var part = await store.UploadPartAsync(new UploadPartRequest(bucketName, key, uploadId, partNumber, context.Request.Body), cancellationToken);
+        var content = S3RequestParser.OpenUploadBody(context);
+        var part = await store.UploadPartAsync(new UploadPartRequest(bucketName, key, uploadId, partNumber, content), cancellationToken);
 
         context.Items[S3MetricsItems.IngressBytes] = part.Size;
         context.Response.StatusCode = StatusCodes.Status200OK;
@@ -243,11 +244,12 @@ internal static class S3ObjectEndpoint
         CancellationToken cancellationToken)
     {
         await authorizer.AuthorizeAsync(context, S3Actions.PutObject, bucketName, key, requireAuthenticated: false, cancellationToken);
+        var content = S3RequestParser.OpenUploadBody(context);
         var info = await store.PutObjectAsync(
             new PutObjectRequest(
                 bucketName,
                 key,
-                context.Request.Body,
+                content,
                 context.Request.ContentType ?? "application/octet-stream",
                 S3RequestParser.ExtractMetadata(context),
                 S3RequestParser.GetHeader(context, HeaderNames.CacheControl),

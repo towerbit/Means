@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 using Means.Core;
 using Means.Protocol.S3;
@@ -11,6 +11,18 @@ namespace Means.Endpoints.S3;
 /// </summary>
 internal static class S3RequestParser
 {
+    /// <summary>
+    /// Returns the object payload stream for an upload request.
+    /// AWS SDKs default to SigV4 streaming uploads, which frame the payload with
+    /// <c>aws-chunked</c> chunk headers and trailers; those frames must be stripped before storage.
+    /// </summary>
+    public static Stream OpenUploadBody(HttpContext context)
+    {
+        return AwsChunkedStream.IsChunkedUpload(context.Request)
+            ? new AwsChunkedStream(context.Request.Body)
+            : context.Request.Body;
+    }
+
     public static IReadOnlyDictionary<string, string> ExtractMetadata(HttpContext context)
     {
         return context.Request.Headers
