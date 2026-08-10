@@ -1,11 +1,36 @@
 using System.Text;
 using Means.Core;
 using Means.Protocol.S3;
+using Microsoft.AspNetCore.Http;
 
 namespace Means.UnitTests;
 
 public sealed class AwsChunkedStreamTests
 {
+    [Theory]
+    [InlineData("STREAMING-AWS4-HMAC-SHA256-PAYLOAD", true)]
+    [InlineData("STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER", true)]
+    [InlineData("UNSIGNED-PAYLOAD", false)]
+    [InlineData("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", false)]
+    public void DetectsStreamingPayloadHash(string payloadHash, bool expected)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers["x-amz-content-sha256"] = payloadHash;
+
+        Assert.Equal(expected, AwsChunkedStream.IsChunkedUpload(context.Request));
+    }
+
+    [Fact]
+    public void DetectsAwsChunkedContentEncodingWithDecodedLength()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.ContentEncoding = "aws-chunked";
+        context.Request.Headers["x-amz-decoded-content-length"] = "42";
+
+        Assert.True(AwsChunkedStream.IsChunkedUpload(context.Request));
+        Assert.Equal(42, AwsChunkedStream.GetDecodedContentLength(context.Request));
+    }
+
     [Fact]
     public async Task DecodesSingleChunkWithTrailer()
     {

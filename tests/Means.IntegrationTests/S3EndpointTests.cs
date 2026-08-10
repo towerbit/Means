@@ -45,6 +45,98 @@ public sealed class S3EndpointTests
     }
 
     [Fact]
+    public async Task PutObjectDecodesAwsSdkChunkedStreamingUploads()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/aws-sdk"), credentials);
+
+        // Mirrors the official AWS SDK for .NET PutObject framing reported in
+        // https://github.com/AIDotNet/Means/issues/3: STREAMING-* payload hash,
+        // Content-Encoding: aws-chunked, trailers, and chunk-signature frames.
+        const string payload = "Hello from the official AWS SDK for .NET.";
+        var encodedBody = new StringBuilder()
+            .Append("29;chunk-signature=119647e959407fc595af3ca390407f4eda10a71d15009395d6eac1a445ce1ba8\r\n")
+            .Append(payload)
+            .Append("\r\n")
+            .Append("0;chunk-signature=dc06f087243710e4960118c084d5a8ea2c80476e2cc6b1e3216336c77f5ecce3\r\n")
+            .Append("x-amz-checksum-crc32:IgkKYA==\r\n")
+            .Append("x-amz-trailer-signature:0b46b3c7ae91b3f1614830d2b9eb3f8cb1199998010b0bb13ee9915623341f6d\r\n")
+            .Append("\r\n")
+            .ToString();
+
+        var put = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/aws-sdk/TEST_UPLOAD.txt")
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(encodedBody))
+        };
+        put.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain");
+        put.Content.Headers.ContentEncoding.Add("aws-chunked");
+        put.Headers.TryAddWithoutValidation("x-amz-decoded-content-length", payload.Length.ToString());
+        put.Headers.TryAddWithoutValidation("x-amz-trailer", "x-amz-checksum-crc32");
+        put.Headers.TryAddWithoutValidation("x-amz-meta-example", "aws-sdk-dotnet");
+
+        var putResponse = await SendSignedAsync(
+            client,
+            put,
+            credentials,
+            payloadHash: "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER");
+        Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
+
+        var get = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/aws-sdk/TEST_UPLOAD.txt"),
+            credentials);
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        var downloaded = await get.Content.ReadAsStringAsync();
+        Assert.Equal(payload, downloaded);
+        Assert.Equal("aws-sdk-dotnet", get.Headers.GetValues("x-amz-meta-example").Single());
+        Assert.DoesNotContain("chunk-signature", downloaded, StringComparison.Ordinal);
+        Assert.Equal(payload.Length, get.Content.Headers.ContentLength);
+
+        // Multipart UploadPart uses the same aws-chunked framing by default.
+        var uploadId = await InitiateMultipartAsync(client, credentials, "aws-sdk", "chunked-part.bin");
+        var partPayload = "part-one";
+        var partBody = $"8;chunk-signature=aaaa\r\n{partPayload}\r\n0;chunk-signature=bbbb\r\n\r\n";
+        var uploadPart = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"https://api.means.local/aws-sdk/chunked-part.bin?partNumber=1&uploadId={Uri.EscapeDataString(uploadId)}")
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(partBody))
+        };
+        uploadPart.Content.Headers.ContentEncoding.Add("aws-chunked");
+        uploadPart.Headers.TryAddWithoutValidation("x-amz-decoded-content-length", partPayload.Length.ToString());
+        var partResponse = await SendSignedAsync(
+            client,
+            uploadPart,
+            credentials,
+            payloadHash: "STREAMING-AWS4-HMAC-SHA256-PAYLOAD");
+        Assert.Equal(HttpStatusCode.OK, partResponse.StatusCode);
+        var partEtag = partResponse.Headers.ETag?.Tag.Trim('"')
+            ?? throw new InvalidOperationException("Missing part ETag.");
+
+        var complete = await CompleteMultipartAsync(
+            client,
+            credentials,
+            "aws-sdk",
+            "chunked-part.bin",
+            uploadId,
+            (1, partEtag));
+        Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
+
+        var assembled = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/aws-sdk/chunked-part.bin"),
+            credentials);
+        Assert.Equal(HttpStatusCode.OK, assembled.StatusCode);
+        Assert.Equal(partPayload, await assembled.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task BucketAndObjectLifecycleWorksAcrossAddressingStyles()
     {
         await using var factory = new MeansWebApplicationFactory();
@@ -761,9 +853,17 @@ public sealed class S3EndpointTests
         Assert.Equal(HttpStatusCode.OK, anonymousAllowed.StatusCode);
     }
 
-    private static async Task<HttpResponseMessage> SendSignedAsync(HttpClient client, HttpRequestMessage request, SigV4SigningCredentials credentials)
+    private static async Task<HttpResponseMessage> SendSignedAsync(
+        HttpClient client,
+        HttpRequestMessage request,
+        SigV4SigningCredentials credentials,
+        string payloadHash = "UNSIGNED-PAYLOAD")
     {
-        SigV4RequestSigner.Sign(request, credentials, now: new DateTimeOffset(2026, 5, 8, 0, 0, 0, TimeSpan.Zero));
+        SigV4RequestSigner.Sign(
+            request,
+            credentials,
+            now: new DateTimeOffset(2026, 5, 8, 0, 0, 0, TimeSpan.Zero),
+            payloadHash: payloadHash);
         return await client.SendAsync(request);
     }
 
