@@ -13,6 +13,28 @@ public static class CopyMetadataDirectives
     public const string Replace = "REPLACE";
 }
 
+public static class S3CannedAcls
+{
+    public const string Private = "private";
+    public const string PublicRead = "public-read";
+}
+
+/// <summary>
+/// Access control view of a bucket or object.
+/// Means has no per-user ownership model yet, so ACLs are not stored: the owner is a single
+/// deployment identity and public read is derived from the effective bucket policy. That keeps
+/// <c>?acl</c> responses consistent with the access the request would actually get.
+/// </summary>
+public sealed record S3AccessControlPolicy(string OwnerId, string OwnerDisplayName, bool PublicRead)
+{
+    public const string DeploymentOwner = "means";
+
+    public static S3AccessControlPolicy ForDeploymentOwner(bool publicRead)
+    {
+        return new S3AccessControlPolicy(DeploymentOwner, DeploymentOwner, publicRead);
+    }
+}
+
 public sealed record BucketVersioningInfo(string BucketName, string Status);
 
 public sealed record DeleteObjectResult(

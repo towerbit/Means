@@ -137,6 +137,115 @@ public sealed class S3EndpointTests
     }
 
     [Fact]
+    public async Task PutObjectVerifiesStreamingUploadIntegrity()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/integrity"), credentials);
+
+        const string payload = "Hello from the official AWS SDK for .NET.";
+        const string payloadCrc32 = "IgkKYA==";
+
+        // A matching CRC32 trailer is accepted and echoed so SDK-side upload verification passes.
+        var accepted = await SendSignedAsync(
+            client,
+            ChunkedPut("https://api.means.local/integrity/ok.txt", payload, payload.Length, payloadCrc32),
+            credentials,
+            payloadHash: "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER");
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        Assert.Equal(payloadCrc32, accepted.Headers.GetValues("x-amz-checksum-crc32").Single());
+
+        // A trailer that disagrees with the payload must not be stored.
+        var mismatched = await SendSignedAsync(
+            client,
+            ChunkedPut("https://api.means.local/integrity/bad-checksum.txt", payload, payload.Length, "AAAAAA=="),
+            credentials,
+            payloadHash: "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER");
+        Assert.Equal(HttpStatusCode.BadRequest, mismatched.StatusCode);
+        Assert.Contains("XAmzContentChecksumMismatch", await mismatched.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        await AssertMissingAsync(client, credentials, "https://api.means.local/integrity/bad-checksum.txt");
+
+        // A body that stops on a frame boundary looks well-formed but is short.
+        var truncated = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/integrity/truncated.txt")
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes($"14;chunk-signature=aaaa\r\n{payload[..20]}\r\n"))
+        };
+        truncated.Content.Headers.ContentEncoding.Add("aws-chunked");
+        truncated.Headers.TryAddWithoutValidation("x-amz-decoded-content-length", payload.Length.ToString());
+        var truncatedResponse = await SendSignedAsync(
+            client,
+            truncated,
+            credentials,
+            payloadHash: "STREAMING-AWS4-HMAC-SHA256-PAYLOAD");
+        Assert.Equal(HttpStatusCode.BadRequest, truncatedResponse.StatusCode);
+        Assert.Contains("IncompleteBody", await truncatedResponse.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        await AssertMissingAsync(client, credentials, "https://api.means.local/integrity/truncated.txt");
+
+        // Plain (non-streaming) uploads honour Content-MD5 and x-amz-checksum-* headers too.
+        var badMd5 = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/integrity/bad-md5.txt")
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(payload))
+        };
+        badMd5.Content.Headers.ContentMD5 = MD5.HashData("other"u8);
+        var badMd5Response = await SendSignedAsync(client, badMd5, credentials);
+        Assert.Equal(HttpStatusCode.BadRequest, badMd5Response.StatusCode);
+        Assert.Contains("BadDigest", await badMd5Response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        var badHeaderChecksum = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/integrity/bad-header.txt")
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(payload))
+        };
+        badHeaderChecksum.Headers.TryAddWithoutValidation("x-amz-checksum-crc32", "AAAAAA==");
+        var badHeaderResponse = await SendSignedAsync(client, badHeaderChecksum, credentials);
+        Assert.Equal(HttpStatusCode.BadRequest, badHeaderResponse.StatusCode);
+
+        // UploadPart validates and echoes part checksums on the same path.
+        var uploadId = await InitiateMultipartAsync(client, credentials, "integrity", "checked-part.bin");
+        var part = ChunkedPut(
+            $"https://api.means.local/integrity/checked-part.bin?partNumber=1&uploadId={Uri.EscapeDataString(uploadId)}",
+            payload,
+            payload.Length,
+            payloadCrc32);
+        var partResponse = await SendSignedAsync(client, part, credentials, payloadHash: "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER");
+        Assert.Equal(HttpStatusCode.OK, partResponse.StatusCode);
+        Assert.Equal(payloadCrc32, partResponse.Headers.GetValues("x-amz-checksum-crc32").Single());
+    }
+
+    private static HttpRequestMessage ChunkedPut(string url, string payload, int declaredLength, string crc32)
+    {
+        var encoded = new StringBuilder()
+            .Append($"{payload.Length:x};chunk-signature={new string('a', 64)}\r\n")
+            .Append(payload)
+            .Append("\r\n")
+            .Append($"0;chunk-signature={new string('b', 64)}\r\n")
+            .Append($"x-amz-checksum-crc32:{crc32}\r\n")
+            .Append($"x-amz-trailer-signature:{new string('c', 64)}\r\n")
+            .Append("\r\n")
+            .ToString();
+
+        var request = new HttpRequestMessage(HttpMethod.Put, url)
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(encoded))
+        };
+        request.Content.Headers.ContentEncoding.Add("aws-chunked");
+        request.Headers.TryAddWithoutValidation("x-amz-decoded-content-length", declaredLength.ToString());
+        request.Headers.TryAddWithoutValidation("x-amz-trailer", "x-amz-checksum-crc32");
+        request.Headers.TryAddWithoutValidation("x-amz-sdk-checksum-algorithm", "CRC32");
+        return request;
+    }
+
+    private static async Task AssertMissingAsync(HttpClient client, SigV4SigningCredentials credentials, string url)
+    {
+        var response = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, url), credentials);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task BucketAndObjectLifecycleWorksAcrossAddressingStyles()
     {
         await using var factory = new MeansWebApplicationFactory();
@@ -254,12 +363,23 @@ public sealed class S3EndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, invalidBucket.StatusCode);
         Assert.Contains("<Code>InvalidArgument</Code>", await invalidBucket.Content.ReadAsStringAsync());
 
-        // Trailing slash is how AWS SDKs address a bucket; it must not be treated as an empty object key.
-        var trailingSlashBucket = await client.GetAsync("https://api.means.local/valid-bucket/");
-        Assert.Equal(HttpStatusCode.BadRequest, trailingSlashBucket.StatusCode);
-        Assert.Contains("<Code>InvalidRequest</Code>", await trailingSlashBucket.Content.ReadAsStringAsync());
-
         var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+
+        // Trailing slash is how AWS SDKs address a bucket; it must resolve as a bucket listing
+        // rather than an empty object key, so a missing bucket reports NoSuchBucket instead of
+        // rejecting the key.
+        var trailingSlashBucket = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/valid-bucket/"),
+            credentials);
+        Assert.Equal(HttpStatusCode.NotFound, trailingSlashBucket.StatusCode);
+        Assert.Contains("<Code>NoSuchBucket</Code>", await trailingSlashBucket.Content.ReadAsStringAsync());
+
+        // Listing without credentials or a public policy is denied before bucket existence is revealed.
+        var anonymousListing = await client.GetAsync("https://api.means.local/valid-bucket/");
+        Assert.Equal(HttpStatusCode.Forbidden, anonymousListing.StatusCode);
+        Assert.Contains("<Code>AccessDenied</Code>", await anonymousListing.Content.ReadAsStringAsync());
+
         await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/ranges"), credentials);
         await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/ranges/file.txt")
         {
@@ -853,6 +973,363 @@ public sealed class S3EndpointTests
         Assert.Equal(HttpStatusCode.OK, anonymousAllowed.StatusCode);
     }
 
+    [Fact]
+    public async Task ListObjectsV1PaginatesWithMarkerAndCollapsesDelimiters()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/listing"), credentials);
+        foreach (var key in new[] { "a.txt", "b.txt", "c.txt", "folder/one.txt", "folder/two.txt" })
+        {
+            var put = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/listing/" + key)
+            {
+                Content = new StringContent("payload", Encoding.UTF8, "text/plain")
+            };
+            Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, put, credentials)).StatusCode);
+        }
+
+        // No list-type parameter selects the original ListObjects, which is what s3fs sends by default.
+        var firstPage = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/listing?delimiter=/&max-keys=2"),
+            credentials);
+        Assert.Equal(HttpStatusCode.OK, firstPage.StatusCode);
+        var firstXml = await firstPage.Content.ReadAsStringAsync();
+        Assert.Contains("<Key>a.txt</Key>", firstXml);
+        Assert.Contains("<Key>b.txt</Key>", firstXml);
+        Assert.DoesNotContain("<Key>c.txt</Key>", firstXml);
+        Assert.Contains("<IsTruncated>true</IsTruncated>", firstXml);
+        Assert.Contains("<MaxKeys>2</MaxKeys>", firstXml);
+        Assert.Equal("b.txt", ReadXmlTag(firstXml, "NextMarker"));
+
+        var secondPage = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/listing?delimiter=/&max-keys=2&marker=b.txt"),
+            credentials);
+        var secondXml = await secondPage.Content.ReadAsStringAsync();
+        Assert.Equal("b.txt", ReadXmlTag(secondXml, "Marker"));
+        Assert.Contains("<Key>c.txt</Key>", secondXml);
+        Assert.Contains("<Prefix>folder/</Prefix>", secondXml);
+        Assert.Contains("<IsTruncated>false</IsTruncated>", secondXml);
+
+        // Resuming from a returned CommonPrefix must skip that whole prefix instead of repeating it.
+        var afterPrefix = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/listing?delimiter=/&marker=folder/"),
+            credentials);
+        var afterPrefixXml = await afterPrefix.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("<Contents>", afterPrefixXml);
+        Assert.DoesNotContain("<CommonPrefixes>", afterPrefixXml);
+    }
+
+    [Fact]
+    public async Task ListObjectsV2SupportsStartAfterAndUrlEncoding()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/listing-v2"), credentials);
+        foreach (var key in new[] { "a.txt", "b.txt", "folder/one.txt" })
+        {
+            var put = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/listing-v2/" + key)
+            {
+                Content = new StringContent("payload", Encoding.UTF8, "text/plain")
+            };
+            Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, put, credentials)).StatusCode);
+        }
+
+        var startAfter = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/listing-v2?list-type=2&start-after=a.txt"),
+            credentials);
+        var startAfterXml = await startAfter.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("<Key>a.txt</Key>", startAfterXml);
+        Assert.Contains("<Key>b.txt</Key>", startAfterXml);
+        Assert.Contains("<StartAfter>a.txt</StartAfter>", startAfterXml);
+        // MaxKeys echoes the request limit rather than the number of returned keys.
+        Assert.Contains("<MaxKeys>1000</MaxKeys>", startAfterXml);
+        Assert.Contains("<KeyCount>2</KeyCount>", startAfterXml);
+
+        var encoded = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/listing-v2?list-type=2&encoding-type=url&prefix=folder/"),
+            credentials);
+        var encodedXml = await encoded.Content.ReadAsStringAsync();
+        Assert.Contains("<EncodingType>url</EncodingType>", encodedXml);
+        Assert.Contains("<Key>folder%2Fone.txt</Key>", encodedXml);
+        Assert.Contains("<Prefix>folder%2F</Prefix>", encodedXml);
+
+        var invalidEncoding = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/listing-v2?list-type=2&encoding-type=base64"),
+            credentials);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidEncoding.StatusCode);
+        Assert.Contains("<Code>InvalidArgument</Code>", await invalidEncoding.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task GetBucketLocationReportsConfiguredRegion()
+    {
+        await using var factory = new MeansWebApplicationFactory(new Dictionary<string, string?>
+        {
+            ["Means:S3:Region"] = "cn-hangzhou"
+        });
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        var create = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/regional"), credentials);
+        Assert.Equal("cn-hangzhou", create.Headers.GetValues("x-amz-bucket-region").Single());
+
+        var head = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Head, "https://api.means.local/regional"), credentials);
+        Assert.Equal("cn-hangzhou", head.Headers.GetValues("x-amz-bucket-region").Single());
+
+        var location = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/regional?location"), credentials);
+        Assert.Equal(HttpStatusCode.OK, location.StatusCode);
+        var locationXml = await location.Content.ReadAsStringAsync();
+        Assert.Contains("<LocationConstraint", locationXml);
+        Assert.Contains("cn-hangzhou", locationXml);
+
+        var missing = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/absent-bucket?location"), credentials);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Contains("<Code>NoSuchBucket</Code>", await missing.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task DeleteObjectsRemovesManyKeysInOneRequest()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/bulk"), credentials);
+        foreach (var key in new[] { "one.txt", "two.txt", "three.txt" })
+        {
+            var put = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/bulk/" + key)
+            {
+                Content = new StringContent("payload", Encoding.UTF8, "text/plain")
+            };
+            Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, put, credentials)).StatusCode);
+        }
+
+        // A key that never existed is reported as deleted, matching S3.
+        var delete = new HttpRequestMessage(HttpMethod.Post, "https://api.means.local/bulk?delete")
+        {
+            Content = new StringContent(
+                "<Delete><Object><Key>one.txt</Key></Object><Object><Key>two.txt</Key></Object><Object><Key>absent.txt</Key></Object></Delete>",
+                Encoding.UTF8,
+                "application/xml")
+        };
+        var deleteResponse = await SendSignedAsync(client, delete, credentials);
+        Assert.Equal(HttpStatusCode.OK, deleteResponse.StatusCode);
+        var deleteXml = await deleteResponse.Content.ReadAsStringAsync();
+        Assert.Contains("<Key>one.txt</Key>", deleteXml);
+        Assert.Contains("<Key>two.txt</Key>", deleteXml);
+        Assert.Contains("<Key>absent.txt</Key>", deleteXml);
+        Assert.DoesNotContain("<Error>", deleteXml);
+
+        var deletedGet = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/bulk/one.txt"), credentials);
+        Assert.Equal(HttpStatusCode.NotFound, deletedGet.StatusCode);
+        var survivorGet = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/bulk/three.txt"), credentials);
+        Assert.Equal(HttpStatusCode.OK, survivorGet.StatusCode);
+
+        var quiet = new HttpRequestMessage(HttpMethod.Post, "https://api.means.local/bulk?delete")
+        {
+            Content = new StringContent(
+                "<Delete><Quiet>true</Quiet><Object><Key>three.txt</Key></Object></Delete>",
+                Encoding.UTF8,
+                "application/xml")
+        };
+        var quietXml = await (await SendSignedAsync(client, quiet, credentials)).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("<Deleted>", quietXml);
+
+        var emptyDelete = new HttpRequestMessage(HttpMethod.Post, "https://api.means.local/bulk?delete")
+        {
+            Content = new StringContent("<Delete></Delete>", Encoding.UTF8, "application/xml")
+        };
+        var emptyResponse = await SendSignedAsync(client, emptyDelete, credentials);
+        Assert.Equal(HttpStatusCode.BadRequest, emptyResponse.StatusCode);
+        Assert.Contains("<Code>MalformedXML</Code>", await emptyResponse.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task AclSubresourcesReflectPolicyAndRejectUnsupportedGrants()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/acls"), credentials);
+        var put = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/acls/report.txt")
+        {
+            Content = new StringContent("payload", Encoding.UTF8, "text/plain")
+        };
+        put.Headers.TryAddWithoutValidation("x-amz-acl", "private");
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, put, credentials)).StatusCode);
+
+        var bucketAcl = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/acls?acl"), credentials);
+        Assert.Equal(HttpStatusCode.OK, bucketAcl.StatusCode);
+        var bucketAclXml = await bucketAcl.Content.ReadAsStringAsync();
+        Assert.Contains("<Permission>FULL_CONTROL</Permission>", bucketAclXml);
+        Assert.DoesNotContain("AllUsers", bucketAclXml);
+
+        var objectAcl = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/acls/report.txt?acl"), credentials);
+        Assert.DoesNotContain("AllUsers", await objectAcl.Content.ReadAsStringAsync());
+
+        var policy = """
+            {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": "*",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::acls/*"
+                }
+              ]
+            }
+            """;
+        var putPolicy = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/acls?policy")
+        {
+            Content = new StringContent(policy, Encoding.UTF8, "application/json")
+        };
+        Assert.Equal(HttpStatusCode.NoContent, (await SendSignedAsync(client, putPolicy, credentials)).StatusCode);
+
+        // A policy that grants anonymous reads must surface as a public-read grant.
+        var publicAcl = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/acls/report.txt?acl"), credentials);
+        var publicAclXml = await publicAcl.Content.ReadAsStringAsync();
+        Assert.Contains("AllUsers", publicAclXml);
+        Assert.Contains("<Permission>READ</Permission>", publicAclXml);
+
+        var acceptedAcl = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/acls?acl");
+        acceptedAcl.Headers.TryAddWithoutValidation("x-amz-acl", "private");
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, acceptedAcl, credentials)).StatusCode);
+
+        var rejectedAcl = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/acls?acl");
+        rejectedAcl.Headers.TryAddWithoutValidation("x-amz-acl", "public-read");
+        var rejectedResponse = await SendSignedAsync(client, rejectedAcl, credentials);
+        Assert.Equal(HttpStatusCode.NotImplemented, rejectedResponse.StatusCode);
+        Assert.Contains("<Code>NotImplemented</Code>", await rejectedResponse.Content.ReadAsStringAsync());
+
+        var rejectedWrite = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/acls/public.txt")
+        {
+            Content = new StringContent("payload", Encoding.UTF8, "text/plain")
+        };
+        rejectedWrite.Headers.TryAddWithoutValidation("x-amz-acl", "public-read-write");
+        Assert.Equal(HttpStatusCode.NotImplemented, (await SendSignedAsync(client, rejectedWrite, credentials)).StatusCode);
+
+        var missingObjectAcl = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/acls/absent.txt?acl"),
+            credentials);
+        Assert.Equal(HttpStatusCode.NotFound, missingObjectAcl.StatusCode);
+    }
+
+    [Fact]
+    public async Task UnimplementedSubresourcesReportNotImplemented()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/probes"), credentials);
+
+        var website = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/probes?website"), credentials);
+        Assert.Equal(HttpStatusCode.NotImplemented, website.StatusCode);
+        Assert.Contains("<Code>NotImplemented</Code>", await website.Content.ReadAsStringAsync());
+
+        var torrent = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/probes/any.txt?torrent"), credentials);
+        Assert.Equal(HttpStatusCode.NotImplemented, torrent.StatusCode);
+
+        // Probing an unimplemented subresource must not be usable without credentials.
+        var anonymous = await client.GetAsync("https://api.means.local/probes?replication");
+        Assert.Equal(HttpStatusCode.Forbidden, anonymous.StatusCode);
+    }
+
+    [Fact]
+    public async Task DirectoryPlaceholderObjectsBehaveLikeFuseMounts()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/fsmount"), credentials);
+
+        // s3fs represents a directory as a zero-byte object whose key ends with a slash and whose
+        // POSIX mode travels in user metadata.
+        var makeDirectory = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/fsmount/dir/")
+        {
+            Content = new ByteArrayContent([])
+        };
+        makeDirectory.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-directory");
+        makeDirectory.Headers.TryAddWithoutValidation("x-amz-meta-mode", "16893");
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, makeDirectory, credentials)).StatusCode);
+
+        var writeFile = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/fsmount/dir/file.txt")
+        {
+            Content = new StringContent("contents", Encoding.UTF8, "text/plain")
+        };
+        writeFile.Headers.TryAddWithoutValidation("x-amz-meta-mode", "33188");
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, writeFile, credentials)).StatusCode);
+
+        var stat = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Head, "https://api.means.local/fsmount/dir/"), credentials);
+        Assert.Equal(HttpStatusCode.OK, stat.StatusCode);
+        Assert.Equal("16893", stat.Headers.GetValues("x-amz-meta-mode").Single());
+
+        var rootListing = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/fsmount?delimiter=/"),
+            credentials);
+        Assert.Contains("<Prefix>dir/</Prefix>", await rootListing.Content.ReadAsStringAsync());
+
+        var directoryListing = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/fsmount?delimiter=/&prefix=dir/"),
+            credentials);
+        var directoryXml = await directoryListing.Content.ReadAsStringAsync();
+        Assert.Contains("<Key>dir/</Key>", directoryXml);
+        Assert.Contains("<Key>dir/file.txt</Key>", directoryXml);
+
+        // Renaming is copy-then-delete, which is how s3fs implements mv.
+        var rename = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/fsmount/dir/renamed.txt");
+        rename.Headers.TryAddWithoutValidation("x-amz-copy-source", "/fsmount/dir/file.txt");
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, rename, credentials)).StatusCode);
+        var removeOriginal = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Delete, "https://api.means.local/fsmount/dir/file.txt"),
+            credentials);
+        Assert.Equal(HttpStatusCode.NoContent, removeOriginal.StatusCode);
+
+        var renamed = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/fsmount/dir/renamed.txt"),
+            credentials);
+        Assert.Equal("contents", await renamed.Content.ReadAsStringAsync());
+        Assert.Equal("33188", renamed.Headers.GetValues("x-amz-meta-mode").Single());
+    }
+
     private static async Task<HttpResponseMessage> SendSignedAsync(
         HttpClient client,
         HttpRequestMessage request,
@@ -943,7 +1420,8 @@ public sealed class S3EndpointTests
         return end < 0 ? null : xml[start..end];
     }
 
-    private sealed class MeansWebApplicationFactory : WebApplicationFactory<Program>
+    private sealed class MeansWebApplicationFactory(IReadOnlyDictionary<string, string?>? overrides = null)
+        : WebApplicationFactory<Program>
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "means-tests", Guid.NewGuid().ToString("N"));
 
@@ -965,6 +1443,11 @@ public sealed class S3EndpointTests
                     ["Means:S3:ServiceHost"] = "api.means.local",
                     ["Means:S3:DomainSuffix"] = "means.local"
                 });
+
+                if (overrides is not null)
+                {
+                    configuration.AddInMemoryCollection(overrides);
+                }
             });
 
             return base.CreateHost(builder);

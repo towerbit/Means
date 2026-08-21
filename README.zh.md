@@ -78,9 +78,10 @@ Means.slnx
 | 分类 | 操作 | 状态 |
 |---|---|---|
 | **服务** | `ListBuckets` | ✅ |
-| **存储桶** | `CreateBucket`, `HeadBucket`, `DeleteBucket` | ✅ |
-| **对象** | `PutObject`, `GetObject`, `HeadObject`, `DeleteObject` | ✅ |
-| **列表** | `ListObjectsV2`（`prefix`, `delimiter`, `continuation-token`, `max-keys`） | ✅ |
+| **存储桶** | `CreateBucket`, `HeadBucket`, `DeleteBucket`, `GetBucketLocation` | ✅ |
+| **对象** | `PutObject`, `GetObject`, `HeadObject`, `DeleteObject`, `DeleteObjects` | ✅ |
+| **列表** | `ListObjects`（`marker`）与 `ListObjectsV2`（`continuation-token`, `start-after`），均支持 `prefix`, `delimiter`, `max-keys`, `encoding-type` | ✅ |
+| **ACL** | bucket 与 object 的 `?acl`，仅接受 owner-only canned ACL | ⚠️ 有限 |
 | **复制** | `CopyObject`（`x-amz-copy-source`，支持 `COPY`/`REPLACE` metadata directive） | ✅ |
 | **分片上传** | Initiate, UploadPart, UploadPartCopy, Complete, Abort, ListParts, ListMultipartUploads | ✅ |
 | **版本控制** | `?versioning`, `?versions`, 按 `versionId` GET/HEAD/DELETE, delete markers | ✅ |

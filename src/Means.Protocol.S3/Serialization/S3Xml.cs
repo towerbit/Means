@@ -29,33 +29,139 @@ public static class S3Xml
         return xml.ToString();
     }
 
-    public static string ListObjectsV2(ListObjectsResult result)
+    public static string ListObjectsV2(
+        ListObjectsResult result,
+        string? continuationToken = null,
+        string? startAfter = null,
+        string? encodingType = null)
     {
+        var encode = KeyEncoder(encodingType);
         var xml = BeginS3("ListBucketResult");
         Element(xml, "Name", result.BucketName);
-        Element(xml, "Prefix", result.Prefix);
+        Element(xml, "Prefix", encode(result.Prefix));
         Element(xml, "KeyCount", result.KeyCount);
-        Element(xml, "MaxKeys", result.Objects.Count + result.CommonPrefixes.Count);
-        Element(xml, "Delimiter", result.Delimiter);
+        Element(xml, "MaxKeys", result.MaxKeys);
+        Element(xml, "Delimiter", encode(result.Delimiter));
         Element(xml, "IsTruncated", result.IsTruncated);
+        if (!string.IsNullOrEmpty(continuationToken))
+        {
+            Element(xml, "ContinuationToken", continuationToken);
+        }
+
         if (result.NextContinuationToken is not null)
         {
             Element(xml, "NextContinuationToken", result.NextContinuationToken);
         }
 
-        foreach (var item in result.Objects)
+        if (!string.IsNullOrEmpty(startAfter))
         {
-            Open(xml, "Contents");
-            Element(xml, "Key", item.Key);
-            Element(xml, "LastModified", FormatDate(item.LastModified));
-            Element(xml, "ETag", QuoteEtag(item.ETag));
-            Element(xml, "Size", item.Size);
-            Element(xml, "StorageClass", "STANDARD");
-            Close(xml, "Contents");
+            Element(xml, "StartAfter", encode(startAfter));
         }
 
-        AppendCommonPrefixes(xml, result.CommonPrefixes);
+        AppendEncodingType(xml, encodingType);
+        AppendContents(xml, result.Objects, encode);
+        AppendCommonPrefixes(xml, result.CommonPrefixes, encode);
         Close(xml, "ListBucketResult");
+        return xml.ToString();
+    }
+
+    /// <summary>
+    /// Renders the original (v1) ListObjects response. Clients such as s3fs and older SDKs issue
+    /// <c>GET /{bucket}</c> without <c>list-type=2</c> and paginate with <c>marker</c>/<c>NextMarker</c>.
+    /// </summary>
+    public static string ListObjects(ListObjectsResult result, string? marker, string? encodingType = null)
+    {
+        var encode = KeyEncoder(encodingType);
+        var xml = BeginS3("ListBucketResult");
+        Element(xml, "Name", result.BucketName);
+        Element(xml, "Prefix", encode(result.Prefix));
+        Element(xml, "Marker", encode(marker));
+        if (result.IsTruncated && result.NextMarker is not null)
+        {
+            Element(xml, "NextMarker", encode(result.NextMarker));
+        }
+
+        Element(xml, "MaxKeys", result.MaxKeys);
+        Element(xml, "Delimiter", encode(result.Delimiter));
+        Element(xml, "IsTruncated", result.IsTruncated);
+        AppendEncodingType(xml, encodingType);
+        AppendContents(xml, result.Objects, encode);
+        AppendCommonPrefixes(xml, result.CommonPrefixes, encode);
+        Close(xml, "ListBucketResult");
+        return xml.ToString();
+    }
+
+    public static string BucketLocation(string region)
+    {
+        var xml = BeginS3("LocationConstraint");
+        // AWS reports us-east-1 as an empty constraint; clients treat both forms as us-east-1.
+        AppendEscaped(xml, string.Equals(region, "us-east-1", StringComparison.Ordinal) ? "" : region);
+        Close(xml, "LocationConstraint");
+        return xml.ToString();
+    }
+
+    public static string AccessControlPolicy(S3AccessControlPolicy acl)
+    {
+        var xml = BeginS3("AccessControlPolicy");
+        Open(xml, "Owner");
+        Element(xml, "ID", acl.OwnerId);
+        Element(xml, "DisplayName", acl.OwnerDisplayName);
+        Close(xml, "Owner");
+        Open(xml, "AccessControlList");
+        AppendGrant(xml, "FULL_CONTROL", grant =>
+        {
+            Element(grant, "ID", acl.OwnerId);
+            Element(grant, "DisplayName", acl.OwnerDisplayName);
+        }, "CanonicalUser");
+        if (acl.PublicRead)
+        {
+            AppendGrant(xml, "READ", grant =>
+                Element(grant, "URI", "http://acs.amazonaws.com/groups/global/AllUsers"), "Group");
+        }
+
+        Close(xml, "AccessControlList");
+        Close(xml, "AccessControlPolicy");
+        return xml.ToString();
+    }
+
+    public static string DeleteResult(BatchDeleteResult result, bool quiet)
+    {
+        var xml = BeginS3("DeleteResult");
+        if (!quiet)
+        {
+            foreach (var deleted in result.Deleted)
+            {
+                Open(xml, "Deleted");
+                Element(xml, "Key", deleted.Key);
+                if (!string.IsNullOrEmpty(deleted.VersionId))
+                {
+                    Element(xml, deleted.DeleteMarker ? "DeleteMarkerVersionId" : "VersionId", deleted.VersionId);
+                }
+
+                if (deleted.DeleteMarker)
+                {
+                    Element(xml, "DeleteMarker", true);
+                }
+
+                Close(xml, "Deleted");
+            }
+        }
+
+        foreach (var error in result.Errors)
+        {
+            Open(xml, "Error");
+            Element(xml, "Key", error.Key);
+            if (!string.IsNullOrEmpty(error.VersionId))
+            {
+                Element(xml, "VersionId", error.VersionId);
+            }
+
+            Element(xml, "Code", error.Code);
+            Element(xml, "Message", error.Message);
+            Close(xml, "Error");
+        }
+
+        Close(xml, "DeleteResult");
         return xml.ToString();
     }
 
@@ -303,14 +409,68 @@ public static class S3Xml
         return xml;
     }
 
-    private static void AppendCommonPrefixes(StringBuilder xml, IReadOnlyList<string> prefixes)
+    private static void AppendCommonPrefixes(
+        StringBuilder xml,
+        IReadOnlyList<string> prefixes,
+        Func<string?, string?>? encode = null)
     {
         foreach (var prefix in prefixes)
         {
             Open(xml, "CommonPrefixes");
-            Element(xml, "Prefix", prefix);
+            Element(xml, "Prefix", encode is null ? prefix : encode(prefix));
             Close(xml, "CommonPrefixes");
         }
+    }
+
+    private static void AppendContents(
+        StringBuilder xml,
+        IReadOnlyList<ListedObject> objects,
+        Func<string?, string?> encode)
+    {
+        foreach (var item in objects)
+        {
+            Open(xml, "Contents");
+            Element(xml, "Key", encode(item.Key));
+            Element(xml, "LastModified", FormatDate(item.LastModified));
+            Element(xml, "ETag", QuoteEtag(item.ETag));
+            Element(xml, "Size", item.Size);
+            Element(xml, "StorageClass", "STANDARD");
+            Close(xml, "Contents");
+        }
+    }
+
+    private static void AppendEncodingType(StringBuilder xml, string? encodingType)
+    {
+        if (!string.IsNullOrEmpty(encodingType))
+        {
+            Element(xml, "EncodingType", encodingType);
+        }
+    }
+
+    private static void AppendGrant(StringBuilder xml, string permission, Action<StringBuilder> grantee, string granteeType)
+    {
+        Open(xml, "Grant");
+        xml.Append("<Grantee xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"")
+            .Append(granteeType)
+            .Append("\">");
+        grantee(xml);
+        Close(xml, "Grantee");
+        Element(xml, "Permission", permission);
+        Close(xml, "Grant");
+    }
+
+    /// <summary>
+    /// Returns the value transform required by <c>encoding-type</c>. URL encoding lets clients read
+    /// keys that contain characters XML cannot carry verbatim, such as control bytes.
+    /// </summary>
+    private static Func<string?, string?> KeyEncoder(string? encodingType)
+    {
+        if (!string.Equals(encodingType, "url", StringComparison.OrdinalIgnoreCase))
+        {
+            return static value => value;
+        }
+
+        return static value => string.IsNullOrEmpty(value) ? value : Uri.EscapeDataString(value);
     }
 
     private static void Open(StringBuilder xml, string name)

@@ -854,8 +854,9 @@ public sealed class ConsoleApiTests
         Assert.Equal(HttpStatusCode.OK, fallback.StatusCode);
         Assert.Contains("id=\"root\"", await fallback.Content.ReadAsStringAsync());
 
+        // The S3 host never falls back to the SPA: an unsigned bucket listing is an S3 XML error.
         var s3HostResponse = await client.GetAsync("https://api.means.local/not-a-spa-route");
-        Assert.Equal(HttpStatusCode.BadRequest, s3HostResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, s3HostResponse.StatusCode);
         Assert.Contains("<Error>", await s3HostResponse.Content.ReadAsStringAsync());
     }
 

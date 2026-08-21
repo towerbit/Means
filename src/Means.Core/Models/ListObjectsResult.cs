@@ -2,6 +2,8 @@ namespace Means.Core;
 
 /// <summary>
 /// Storage-neutral result used by the protocol layer to render S3 ListBucketResult XML.
+/// <see cref="NextMarker"/> is the ListObjects (v1) resume point and is set only for truncated pages;
+/// <see cref="NextContinuationToken"/> is its ListObjectsV2 equivalent.
 /// </summary>
 public sealed record ListObjectsResult(
     string BucketName,
@@ -11,4 +13,6 @@ public sealed record ListObjectsResult(
     bool IsTruncated,
     string? NextContinuationToken,
     IReadOnlyList<ListedObject> Objects,
-    IReadOnlyList<string> CommonPrefixes);
+    IReadOnlyList<string> CommonPrefixes,
+    int MaxKeys = 1000,
+    string? NextMarker = null);

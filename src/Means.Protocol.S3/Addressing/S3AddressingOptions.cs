@@ -24,4 +24,11 @@ public sealed class S3AddressingOptions
     /// Browser uploads/downloads can call /s3/{bucket}/{key} without conflicting with SPA routes.
     /// </summary>
     public string AliasPrefix { get; set; } = "/s3";
+
+    /// <summary>
+    /// Region reported by GetBucketLocation and the x-amz-bucket-region header.
+    /// Clients such as s3fs and the AWS SDKs use it to pick a signing region, so it must match the
+    /// region those clients sign with.
+    /// </summary>
+    public string Region { get; set; } = "us-east-1";
 }

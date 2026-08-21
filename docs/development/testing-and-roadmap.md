@@ -123,7 +123,8 @@ Console API tests 覆盖：
 - ASP.NET Core S3-compatible 数据面。
 - XlFs 默认存储后端。
 - Bucket/Object CRUD。
-- ListObjectsV2。
+- ListObjects v1 与 ListObjectsV2（marker / continuation-token / start-after / encoding-type）。
+- DeleteObjects 批量删除、GetBucketLocation、bucket/object `?acl`。
 - Range GET。
 - SigV4 header/query presign。
 - Basic bucket policy。

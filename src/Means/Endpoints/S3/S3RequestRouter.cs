@@ -12,6 +12,7 @@ internal static class S3RequestRouter
     public static async Task DispatchAsync(
         HttpContext context,
         S3Address address,
+        string region,
         IObjectStore store,
         IConsoleStore consoleStore,
         S3RequestAuthorizer authorizer,
@@ -26,7 +27,7 @@ internal static class S3RequestRouter
         S3RequestParser.ValidateBucketName(address.BucketName);
         if (address.ObjectKey is null)
         {
-            await S3BucketEndpoint.HandleAsync(context, address.BucketName, store, authorizer, cancellationToken);
+            await S3BucketEndpoint.HandleAsync(context, address.BucketName, region, store, authorizer, cancellationToken);
             return;
         }
 

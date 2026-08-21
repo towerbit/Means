@@ -59,8 +59,11 @@ public sealed partial class XlFsStore
         var dbPrefix = Keys.CurrentObjectPrefix(bucketName) + Escape(prefix);
         var objects = new List<ListedObject>();
         var commonPrefixes = new SortedSet<string>(StringComparer.Ordinal);
-        string? afterKey = DecodeToken(options.ContinuationToken);
+        string? afterKey = DecodeToken(options.ContinuationToken)
+            ?? StartAfterExclusiveBound(bucketName, options.StartAfter, options.Delimiter);
         string? nextToken = null;
+        // Last key or common prefix handed to the caller, which is what ListObjects (v1) returns as NextMarker.
+        string? lastMarker = null;
         // Delimiter listings collapse many object keys into one CommonPrefix. Scan in batches and
         // skip past each collapsed prefix so a large folder cannot hide sibling folders.
         const int scanBatchSize = 256;
@@ -98,6 +101,7 @@ public sealed partial class XlFsStore
                     {
                         var commonPrefix = prefix + rest[..(delimiterIndex + options.Delimiter.Length)];
                         commonPrefixes.Add(commonPrefix);
+                        lastMarker = commonPrefix;
                         // Jump past every remaining object key under this common prefix.
                         afterKey = CommonPrefixExclusiveUpperBound(bucketName, commonPrefix);
                         advancedPastCommonPrefix = true;
@@ -106,6 +110,7 @@ public sealed partial class XlFsStore
                 }
 
                 objects.Add(new ListedObject(record.Key, record.ETag, record.ContentLength, record.LastModified, record.ContentType));
+                lastMarker = record.Key;
                 afterKey = row.Key;
             }
 
@@ -134,7 +139,9 @@ public sealed partial class XlFsStore
             nextToken is not null,
             nextToken,
             objects,
-            commonPrefixes.ToArray());
+            commonPrefixes.ToArray(),
+            maxKeys,
+            nextToken is not null ? lastMarker : null);
     }
 
     private static string CommonPrefixExclusiveUpperBound(string bucketName, string commonPrefix)
@@ -142,6 +149,21 @@ public sealed partial class XlFsStore
         // Hex encoding preserves lexicographic order, so appending U+FFFF yields an exclusive upper bound
         // for every object key that starts with the common prefix.
         return Keys.CurrentObjectPrefix(bucketName) + Escape(commonPrefix) + '\uffff';
+    }
+
+    private static string? StartAfterExclusiveBound(string bucketName, string? startAfter, string? delimiter)
+    {
+        if (string.IsNullOrEmpty(startAfter))
+        {
+            return null;
+        }
+
+        // A marker naming an already-returned common prefix must skip that whole prefix range.
+        // Resuming immediately after the prefix string itself would re-collapse it into the same
+        // CommonPrefix on every page and never advance.
+        return !string.IsNullOrEmpty(delimiter) && startAfter.EndsWith(delimiter, StringComparison.Ordinal)
+            ? CommonPrefixExclusiveUpperBound(bucketName, startAfter)
+            : Keys.CurrentObject(bucketName, startAfter);
     }
 
     public async Task<ListObjectVersionsResult> ListObjectVersionsAsync(

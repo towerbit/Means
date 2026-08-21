@@ -3,6 +3,7 @@ service: means-object-storage
 protocol: s3-compatible
 defaults:
   region: us-east-1
+  regionSource: "Means:S3:Region"
   service: s3
   signingAlgorithm: AWS4-HMAC-SHA256
   payloadHash: UNSIGNED-PAYLOAD
@@ -89,6 +90,58 @@ operations:
     query:
       lifecycle: ""
     auth: signed
+  getBucketLocation:
+    serverOnly: true
+    method: GET
+    path: "/{bucket}"
+    query:
+      location: ""
+    auth: signed-or-policy
+    responseXml: LocationConstraint
+    responseHeaders:
+      x-amz-bucket-region: required
+  getBucketAcl:
+    serverOnly: true
+    method: GET
+    path: "/{bucket}"
+    query:
+      acl: ""
+    auth: signed
+    responseXml: AccessControlPolicy
+  putBucketAcl:
+    serverOnly: true
+    method: PUT
+    path: "/{bucket}"
+    query:
+      acl: ""
+    auth: signed
+    requestHeaders:
+      x-amz-acl: optional
+    requestXml: AccessControlPolicy
+    notes: >
+      Only owner-only canned ACLs are accepted (private, bucket-owner-read,
+      bucket-owner-full-control). Other grants return NotImplemented; use a bucket policy
+      to grant anonymous access.
+  getObjectAcl:
+    serverOnly: true
+    method: GET
+    path: "/{bucket}/{key}"
+    query:
+      acl: ""
+      versionId: optional
+    auth: signed
+    responseXml: AccessControlPolicy
+  putObjectAcl:
+    serverOnly: true
+    method: PUT
+    path: "/{bucket}/{key}"
+    query:
+      acl: ""
+      versionId: optional
+    auth: signed
+    requestHeaders:
+      x-amz-acl: optional
+    requestXml: AccessControlPolicy
   listObjects:
     method: GET
     path: "/{bucket}"
@@ -97,9 +150,40 @@ operations:
       prefix: optional
       delimiter: optional
       continuation-token: optional
+      start-after: optional
       max-keys: optional
+      encoding-type: optional
     auth: signed-or-policy
     responseXml: ListBucketResult
+  listObjectsV1:
+    serverOnly: true
+    method: GET
+    path: "/{bucket}"
+    query:
+      prefix: optional
+      delimiter: optional
+      marker: optional
+      max-keys: optional
+      encoding-type: optional
+    auth: signed-or-policy
+    responseXml: ListBucketResult
+    notes: >
+      Selected when list-type is absent. Truncated pages return NextMarker, which the client
+      passes back as marker. A NextMarker that names a CommonPrefix resumes after that whole prefix.
+  deleteObjects:
+    serverOnly: true
+    method: POST
+    path: "/{bucket}"
+    query:
+      delete: ""
+    auth: signed-or-policy
+    requestXml: Delete
+    responseXml: DeleteResult
+    limits:
+      maxKeysPerRequest: 1000
+    notes: >
+      Authorization is evaluated per key, so denied keys appear as Error entries while the
+      remaining keys are deleted.
   listObjectVersions:
     method: GET
     path: "/{bucket}"
@@ -343,6 +427,7 @@ errors:
   - NoSuchKey
   - NoSuchUpload
   - NoSuchVersion
+  - NotImplemented
   - PreconditionFailed
   - SignatureDoesNotMatch
 multipartUpload:
@@ -377,6 +462,11 @@ bucketPolicy:
         - s3:GetObjectTagging
         - s3:PutObjectTagging
         - s3:DeleteObjectTagging
+        - s3:GetBucketLocation
+        - s3:GetBucketAcl
+        - s3:PutBucketAcl
+        - s3:GetObjectAcl
+        - s3:PutObjectAcl
         - s3:GetBucketCORS
         - s3:PutBucketCORS
         - s3:GetBucketNotification
@@ -415,6 +505,11 @@ accessKeyPolicy:
         - s3:GetObjectTagging
         - s3:PutObjectTagging
         - s3:DeleteObjectTagging
+        - s3:GetBucketLocation
+        - s3:GetBucketAcl
+        - s3:PutBucketAcl
+        - s3:GetObjectAcl
+        - s3:PutObjectAcl
         - s3:GetBucketCORS
         - s3:PutBucketCORS
         - s3:GetBucketNotification

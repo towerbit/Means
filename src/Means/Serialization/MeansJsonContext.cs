@@ -40,6 +40,7 @@ namespace Means.Serialization;
 [JsonSerializable(typeof(CompletedMultipartPartConsoleRequest))]
 [JsonSerializable(typeof(AbortMultipartConsoleRequest))]
 [JsonSerializable(typeof(CreateAccessKeyRequest))]
+[JsonSerializable(typeof(SetAccessKeyStatusRequest))]
 [JsonSerializable(typeof(UpdateSystemSettingsRequest))]
 [JsonSerializable(typeof(SystemSettingsResponse))]
 [JsonSerializable(typeof(SaveErasureCodingProfileRequest))]

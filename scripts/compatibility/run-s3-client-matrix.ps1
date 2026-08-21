@@ -22,7 +22,12 @@ if (Get-Command aws -ErrorAction SilentlyContinue) {
         aws --endpoint-url $Endpoint s3api create-bucket --bucket $Bucket | Out-Null
         aws --endpoint-url $Endpoint s3api put-object --bucket $Bucket --key aws-cli.txt --body $PSCommandPath | Out-Null
         aws --endpoint-url $Endpoint s3api head-object --bucket $Bucket --key aws-cli.txt | Out-Null
-        aws --endpoint-url $Endpoint s3api delete-object --bucket $Bucket --key aws-cli.txt | Out-Null
+        # list-objects is the v1 API and get-bucket-location is what clients call to pick a signing region.
+        aws --endpoint-url $Endpoint s3api list-objects --bucket $Bucket --delimiter / | Out-Null
+        aws --endpoint-url $Endpoint s3api list-objects-v2 --bucket $Bucket --start-after aws-cli.tx | Out-Null
+        aws --endpoint-url $Endpoint s3api get-bucket-location --bucket $Bucket | Out-Null
+        aws --endpoint-url $Endpoint s3api get-bucket-acl --bucket $Bucket | Out-Null
+        aws --endpoint-url $Endpoint s3api delete-objects --bucket $Bucket --delete "Objects=[{Key=aws-cli.txt}],Quiet=false" | Out-Null
         Add-Result "aws-cli" "passed"
     } catch {
         Add-Result "aws-cli" "failed" $_.Exception.Message
@@ -56,7 +61,7 @@ s3.delete_object(Bucket='$Bucket', Key='boto3.txt')
     Add-Result "boto3" "skipped" "python command not found"
 }
 
-foreach ($tool in @("rclone", "mc")) {
+foreach ($tool in @("rclone", "mc", "s3fs")) {
     if (Get-Command $tool -ErrorAction SilentlyContinue) {
         Add-Result $tool "available" "Install-specific smoke tests are documented but not auto-configured by this script."
     } else {

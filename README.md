@@ -78,9 +78,10 @@ Means.slnx
 | Category | Operations | Status |
 |---|---|---|
 | **Service** | `ListBuckets` | ✅ |
-| **Bucket** | `CreateBucket`, `HeadBucket`, `DeleteBucket` | ✅ |
-| **Object** | `PutObject`, `GetObject`, `HeadObject`, `DeleteObject` | ✅ |
-| **Listing** | `ListObjectsV2` (`prefix`, `delimiter`, `continuation-token`, `max-keys`) | ✅ |
+| **Bucket** | `CreateBucket`, `HeadBucket`, `DeleteBucket`, `GetBucketLocation` | ✅ |
+| **Object** | `PutObject`, `GetObject`, `HeadObject`, `DeleteObject`, `DeleteObjects` | ✅ |
+| **Listing** | `ListObjects` (`marker`) and `ListObjectsV2` (`continuation-token`, `start-after`), plus `prefix`, `delimiter`, `max-keys`, `encoding-type` | ✅ |
+| **ACL** | `?acl` on buckets and objects, owner-only canned ACLs | ⚠️ Limited |
 | **Copy** | `CopyObject` (`x-amz-copy-source`, `COPY`/`REPLACE` metadata directive) | ✅ |
 | **Multipart** | Initiate, UploadPart, UploadPartCopy, Complete, Abort, ListParts, ListMultipartUploads | ✅ |
 | **Versioning** | `?versioning`, `?versions`, GET/HEAD/DELETE by `versionId`, delete markers | ✅ |
@@ -90,6 +91,7 @@ Means.slnx
 | **Notification** | `?notification` config persistence (reserved interface) | ✅ |
 | **Policy** | `?policy` sub-resource (`GET`/`PUT`/`DELETE`) | ✅ |
 | **Pre-signed URL** | SigV4 pre-signed `GET`, `PUT`, multipart `UploadPart` | ✅ |
+| **Upload integrity** | `aws-chunked` decoding, `x-amz-decoded-content-length` enforcement, `Content-MD5` and `x-amz-checksum-*` (CRC32, CRC32C, CRC64NVME, SHA1, SHA256) verification | ✅ |
 
 #### Key Implementation Details
 

@@ -17,6 +17,11 @@ public static class S3Actions
     public const string GetObjectTagging = "s3:GetObjectTagging";
     public const string PutObjectTagging = "s3:PutObjectTagging";
     public const string DeleteObjectTagging = "s3:DeleteObjectTagging";
+    public const string GetBucketLocation = "s3:GetBucketLocation";
+    public const string GetBucketAcl = "s3:GetBucketAcl";
+    public const string PutBucketAcl = "s3:PutBucketAcl";
+    public const string GetObjectAcl = "s3:GetObjectAcl";
+    public const string PutObjectAcl = "s3:PutObjectAcl";
     public const string GetBucketVersioning = "s3:GetBucketVersioning";
     public const string PutBucketVersioning = "s3:PutBucketVersioning";
     public const string GetLifecycleConfiguration = "s3:GetLifecycleConfiguration";

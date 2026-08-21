@@ -84,6 +84,60 @@ public sealed class AwsChunkedStreamTests
     }
 
     [Fact]
+    public async Task CapturesTrailingHeaders()
+    {
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(
+            "5;chunk-signature=aaaa\r\nhello\r\n0;chunk-signature=bbbb\r\nx-amz-checksum-crc32:IgkKYA==\r\nx-amz-trailer-signature:cccc\r\n\r\n"));
+        await using var chunked = new AwsChunkedStream(source);
+        await using var target = new MemoryStream();
+        await chunked.CopyToAsync(target);
+
+        Assert.Equal("IgkKYA==", chunked.Trailers["x-amz-checksum-crc32"]);
+        Assert.Equal("cccc", chunked.Trailers["x-amz-trailer-signature"]);
+    }
+
+    [Fact]
+    public async Task AcceptsBodyMatchingDeclaredDecodedLength()
+    {
+        Assert.Equal("hello", await DecodeAsync("5;chunk-signature=aaaa\r\nhello\r\n0;chunk-signature=bbbb\r\n\r\n", expectedDecodedLength: 5));
+    }
+
+    [Fact]
+    public async Task RejectsBodyTruncatedOnAChunkBoundary()
+    {
+        // A dropped connection leaves the framing well-formed but the payload short, which is
+        // exactly the case that silently produced corrupt objects.
+        var error = await Assert.ThrowsAsync<MeansException>(
+            () => DecodeAsync("5;chunk-signature=aaaa\r\nhello\r\n", expectedDecodedLength: 11));
+
+        Assert.Equal(MeansErrorCodes.IncompleteBody, error.Code);
+    }
+
+    [Fact]
+    public async Task RejectsBodyTruncatedInsideAChunkPayload()
+    {
+        var error = await Assert.ThrowsAsync<MeansException>(
+            () => DecodeAsync("b;chunk-signature=aaaa\r\nhello", expectedDecodedLength: 11));
+
+        Assert.Equal(MeansErrorCodes.IncompleteBody, error.Code);
+    }
+
+    [Fact]
+    public async Task RejectsBodyLongerThanDeclaredDecodedLength()
+    {
+        var error = await Assert.ThrowsAsync<MeansException>(
+            () => DecodeAsync("5;chunk-signature=aaaa\r\nhello\r\n0;chunk-signature=bbbb\r\n\r\n", expectedDecodedLength: 2));
+
+        Assert.Equal(MeansErrorCodes.IncompleteBody, error.Code);
+    }
+
+    [Fact]
+    public async Task AcceptsAnEmptyBodyDeclaringZeroLength()
+    {
+        Assert.Equal("", await DecodeAsync("0;chunk-signature=aaaa\r\n\r\n", expectedDecodedLength: 0));
+    }
+
+    [Fact]
     public async Task DecodesPayloadLargerThanInternalBuffer()
     {
         var payload = new string('x', 40 * 1024);
@@ -92,10 +146,10 @@ public sealed class AwsChunkedStreamTests
         Assert.Equal(payload, await DecodeAsync(encoded));
     }
 
-    private static async Task<string> DecodeAsync(string encoded)
+    private static async Task<string> DecodeAsync(string encoded, long? expectedDecodedLength = null)
     {
         await using var source = new MemoryStream(Encoding.UTF8.GetBytes(encoded));
-        await using var chunked = new AwsChunkedStream(source);
+        await using var chunked = new AwsChunkedStream(source, expectedDecodedLength);
         await using var target = new MemoryStream();
         await chunked.CopyToAsync(target);
         return Encoding.UTF8.GetString(target.ToArray());

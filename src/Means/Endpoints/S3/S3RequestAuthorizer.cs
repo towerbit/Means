@@ -6,6 +6,8 @@ namespace Means.Endpoints.S3;
 /// <summary>
 /// Coordinates SigV4 authentication and policy authorization for one S3 request.
 /// Order: SigV4 → access-key policy → bucket policy.
+/// One instance serves a single request, so the signature is verified once even when an operation
+/// authorizes many keys (for example DeleteObjects).
 /// </summary>
 internal sealed class S3RequestAuthorizer(
     IAccessKeyStore accessKeys,
@@ -13,7 +15,14 @@ internal sealed class S3RequestAuthorizer(
     BucketPolicyEvaluator policyEvaluator,
     SigV4RequestVerifier verifier)
 {
-    public async Task AuthorizeAsync(
+    private SigV4AuthResult? _auth;
+    private AccessKeyCredential? _credential;
+    private bool _credentialResolved;
+
+    /// <summary>
+    /// Authorizes one action and returns the authenticated access key, or null when anonymous.
+    /// </summary>
+    public async Task<string?> AuthorizeAsync(
         HttpContext context,
         string action,
         string? bucketName,
@@ -21,7 +30,7 @@ internal sealed class S3RequestAuthorizer(
         bool requireAuthenticated,
         CancellationToken cancellationToken)
     {
-        var auth = await verifier.VerifyAsync(context.Request, accessKeys.GetCredentialAsync, cancellationToken);
+        var auth = await VerifyAsync(context, cancellationToken);
         if (auth.IsSigned && !auth.IsAuthenticated)
         {
             throw new MeansException(auth.ErrorCode ?? MeansErrorCodes.AccessDenied, auth.ErrorMessage ?? "Access denied.", 403);
@@ -29,7 +38,7 @@ internal sealed class S3RequestAuthorizer(
 
         if (auth.IsAuthenticated && !string.IsNullOrEmpty(auth.AccessKey))
         {
-            var credential = await accessKeys.GetCredentialAsync(auth.AccessKey, cancellationToken);
+            var credential = await ResolveCredentialAsync(auth.AccessKey, cancellationToken);
             if (!string.IsNullOrWhiteSpace(credential?.PolicyJson))
             {
                 var accessKeyDecision = policyEvaluator.Evaluate(
@@ -53,7 +62,7 @@ internal sealed class S3RequestAuthorizer(
                 throw new MeansException(MeansErrorCodes.AccessDenied, "Authentication is required.", 403);
             }
 
-            return;
+            return auth.AccessKey;
         }
 
         var policy = await policies.GetPolicyAsync(bucketName, cancellationToken);
@@ -67,14 +76,46 @@ internal sealed class S3RequestAuthorizer(
         {
             throw new MeansException(MeansErrorCodes.AccessDenied, "Authentication is required.", 403);
         }
+
+        return auth.AccessKey;
     }
 
     public async Task RequireAuthenticatedAsync(HttpContext context, CancellationToken cancellationToken)
     {
-        var auth = await verifier.VerifyAsync(context.Request, accessKeys.GetCredentialAsync, cancellationToken);
+        var auth = await VerifyAsync(context, cancellationToken);
         if (!auth.IsAuthenticated)
         {
             throw new MeansException(auth.ErrorCode ?? MeansErrorCodes.AccessDenied, auth.ErrorMessage ?? "Authentication is required.", 403);
         }
+    }
+
+    /// <summary>
+    /// Reports whether the bucket policy grants the action to anonymous callers.
+    /// ACL responses use this so a reported public-read grant reflects real access.
+    /// </summary>
+    public async Task<bool> IsAnonymousAllowedAsync(
+        string action,
+        string bucketName,
+        string? key,
+        CancellationToken cancellationToken)
+    {
+        var policy = await policies.GetPolicyAsync(bucketName, cancellationToken);
+        return policyEvaluator.Evaluate(policy, action, bucketName, key, null) == PolicyDecision.Allow;
+    }
+
+    private async Task<SigV4AuthResult> VerifyAsync(HttpContext context, CancellationToken cancellationToken)
+    {
+        return _auth ??= await verifier.VerifyAsync(context.Request, accessKeys.GetCredentialAsync, cancellationToken);
+    }
+
+    private async Task<AccessKeyCredential?> ResolveCredentialAsync(string accessKey, CancellationToken cancellationToken)
+    {
+        if (!_credentialResolved)
+        {
+            _credential = await accessKeys.GetCredentialAsync(accessKey, cancellationToken);
+            _credentialResolved = true;
+        }
+
+        return _credential;
     }
 }

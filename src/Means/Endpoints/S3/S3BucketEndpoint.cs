@@ -4,14 +4,37 @@ using Means.Protocol.S3;
 namespace Means.Endpoints.S3;
 
 /// <summary>
-/// Handles bucket-scoped S3 operations such as create, head, delete, and ListObjectsV2.
+/// Handles bucket-scoped S3 operations such as create, head, delete, ACL, location, and listings.
 /// Object-key operations are handled separately so bucket behavior remains easy to scan.
 /// </summary>
 internal static class S3BucketEndpoint
 {
+    /// <summary>
+    /// Bucket subresources defined by S3 that Means does not implement. They are rejected explicitly
+    /// so a request such as <c>GET /{bucket}?logging</c> cannot fall through to an object listing.
+    /// </summary>
+    private static readonly string[] UnsupportedSubresources =
+    [
+        "accelerate",
+        "analytics",
+        "encryption",
+        "intelligent-tiering",
+        "inventory",
+        "logging",
+        "metrics",
+        "object-lock",
+        "ownershipControls",
+        "publicAccessBlock",
+        "replication",
+        "requestPayment",
+        "tagging",
+        "website"
+    ];
+
     public static async Task HandleAsync(
         HttpContext context,
         string bucketName,
+        string region,
         IObjectStore store,
         S3RequestAuthorizer authorizer,
         CancellationToken cancellationToken)
@@ -41,25 +64,53 @@ internal static class S3BucketEndpoint
             return;
         }
 
+        if (context.Request.Query.ContainsKey("location"))
+        {
+            await HandleLocationAsync(context, bucketName, region, store, authorizer, cancellationToken);
+            return;
+        }
+
+        if (context.Request.Query.ContainsKey("acl"))
+        {
+            await HandleAclAsync(context, bucketName, store, authorizer, cancellationToken);
+            return;
+        }
+
+        if (context.Request.Query.ContainsKey("delete"))
+        {
+            await HandleDeleteObjectsAsync(context, bucketName, store, authorizer, cancellationToken);
+            return;
+        }
+
+        var unsupported = UnsupportedSubresources.FirstOrDefault(context.Request.Query.ContainsKey);
+        if (unsupported is not null)
+        {
+            // Authenticate first so anonymous callers cannot probe which subresources exist.
+            await authorizer.RequireAuthenticatedAsync(context, cancellationToken);
+            throw new MeansException(
+                MeansErrorCodes.NotImplemented,
+                $"The bucket subresource '{unsupported}' is not implemented.",
+                501);
+        }
+
         if (HttpMethods.IsPut(method))
         {
             await authorizer.AuthorizeAsync(context, S3Actions.CreateBucket, bucketName, null, requireAuthenticated: true, cancellationToken);
+            S3RequestParser.EnsureSupportedCannedAcl(context);
             await store.CreateBucketAsync(bucketName, cancellationToken);
             context.Response.StatusCode = StatusCodes.Status200OK;
             context.Response.Headers.Location = "/" + bucketName;
+            context.Response.Headers["x-amz-bucket-region"] = region;
             return;
         }
 
         if (HttpMethods.IsHead(method))
         {
             await authorizer.AuthorizeAsync(context, S3Actions.ListBucket, bucketName, null, requireAuthenticated: false, cancellationToken);
-            var bucket = await store.GetBucketAsync(bucketName, cancellationToken);
-            if (bucket is null)
-            {
-                throw new MeansException(MeansErrorCodes.NoSuchBucket, "Bucket does not exist.", 404);
-            }
-
+            await EnsureBucketExistsAsync(store, bucketName, cancellationToken);
             context.Response.StatusCode = StatusCodes.Status200OK;
+            // Clients such as s3fs and the AWS SDKs read the bucket region from HeadBucket to pick a signing region.
+            context.Response.Headers["x-amz-bucket-region"] = region;
             return;
         }
 
@@ -99,20 +150,151 @@ internal static class S3BucketEndpoint
             return;
         }
 
-        if (HttpMethods.IsGet(method) && context.Request.Query["list-type"] == "2")
+        if (HttpMethods.IsGet(method))
         {
-            await authorizer.AuthorizeAsync(context, S3Actions.ListBucket, bucketName, null, requireAuthenticated: false, cancellationToken);
-            var options = new ListObjectsOptions(
-                context.Request.Query["prefix"].FirstOrDefault(),
-                context.Request.Query["delimiter"].FirstOrDefault(),
-                context.Request.Query["continuation-token"].FirstOrDefault(),
-                S3RequestParser.ParseMaxKeys(context.Request.Query["max-keys"].FirstOrDefault()));
-            var result = await store.ListObjectsAsync(bucketName, options, cancellationToken);
-            await S3ResponseWriter.WriteXmlAsync(context, StatusCodes.Status200OK, S3Xml.ListObjectsV2(result), cancellationToken);
+            await HandleListObjectsAsync(context, bucketName, store, authorizer, cancellationToken);
             return;
         }
 
         throw new MeansException(MeansErrorCodes.InvalidRequest, "Unsupported bucket operation.", 400);
+    }
+
+    /// <summary>
+    /// Serves both listing generations: <c>list-type=2</c> selects ListObjectsV2, and its absence
+    /// selects the original ListObjects, which is what s3fs and older SDKs send by default.
+    /// </summary>
+    private static async Task HandleListObjectsAsync(
+        HttpContext context,
+        string bucketName,
+        IObjectStore store,
+        S3RequestAuthorizer authorizer,
+        CancellationToken cancellationToken)
+    {
+        await authorizer.AuthorizeAsync(context, S3Actions.ListBucket, bucketName, null, requireAuthenticated: false, cancellationToken);
+        var prefix = context.Request.Query["prefix"].FirstOrDefault();
+        var delimiter = context.Request.Query["delimiter"].FirstOrDefault();
+        var maxKeys = S3RequestParser.ParseMaxKeys(context.Request.Query["max-keys"].FirstOrDefault());
+        var encodingType = S3RequestParser.ParseEncodingType(context.Request.Query["encoding-type"].FirstOrDefault());
+
+        if (context.Request.Query["list-type"] == "2")
+        {
+            var continuationToken = context.Request.Query["continuation-token"].FirstOrDefault();
+            var startAfter = context.Request.Query["start-after"].FirstOrDefault();
+            var result = await store.ListObjectsAsync(
+                bucketName,
+                new ListObjectsOptions(prefix, delimiter, continuationToken, maxKeys, startAfter),
+                cancellationToken);
+            await S3ResponseWriter.WriteXmlAsync(
+                context,
+                StatusCodes.Status200OK,
+                S3Xml.ListObjectsV2(result, continuationToken, startAfter, encodingType),
+                cancellationToken);
+            return;
+        }
+
+        var marker = context.Request.Query["marker"].FirstOrDefault();
+        var listing = await store.ListObjectsAsync(
+            bucketName,
+            new ListObjectsOptions(prefix, delimiter, null, maxKeys, marker),
+            cancellationToken);
+        await S3ResponseWriter.WriteXmlAsync(
+            context,
+            StatusCodes.Status200OK,
+            S3Xml.ListObjects(listing, marker, encodingType),
+            cancellationToken);
+    }
+
+    private static async Task HandleLocationAsync(
+        HttpContext context,
+        string bucketName,
+        string region,
+        IObjectStore store,
+        S3RequestAuthorizer authorizer,
+        CancellationToken cancellationToken)
+    {
+        if (!HttpMethods.IsGet(context.Request.Method))
+        {
+            throw new MeansException(MeansErrorCodes.InvalidRequest, "Unsupported location operation.", 400);
+        }
+
+        await authorizer.AuthorizeAsync(context, S3Actions.GetBucketLocation, bucketName, null, requireAuthenticated: false, cancellationToken);
+        await EnsureBucketExistsAsync(store, bucketName, cancellationToken);
+        context.Response.Headers["x-amz-bucket-region"] = region;
+        await S3ResponseWriter.WriteXmlAsync(context, StatusCodes.Status200OK, S3Xml.BucketLocation(region), cancellationToken);
+    }
+
+    private static async Task HandleAclAsync(
+        HttpContext context,
+        string bucketName,
+        IObjectStore store,
+        S3RequestAuthorizer authorizer,
+        CancellationToken cancellationToken)
+    {
+        if (HttpMethods.IsGet(context.Request.Method))
+        {
+            await authorizer.AuthorizeAsync(context, S3Actions.GetBucketAcl, bucketName, null, requireAuthenticated: true, cancellationToken);
+            await EnsureBucketExistsAsync(store, bucketName, cancellationToken);
+            var publicRead = await authorizer.IsAnonymousAllowedAsync(S3Actions.ListBucket, bucketName, null, cancellationToken);
+            await S3ResponseWriter.WriteXmlAsync(
+                context,
+                StatusCodes.Status200OK,
+                S3Xml.AccessControlPolicy(S3AccessControlPolicy.ForDeploymentOwner(publicRead)),
+                cancellationToken);
+            return;
+        }
+
+        if (HttpMethods.IsPut(context.Request.Method))
+        {
+            await authorizer.AuthorizeAsync(context, S3Actions.PutBucketAcl, bucketName, null, requireAuthenticated: true, cancellationToken);
+            await EnsureBucketExistsAsync(store, bucketName, cancellationToken);
+            await EnsureOwnerOnlyAclAsync(context, cancellationToken);
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            return;
+        }
+
+        throw new MeansException(MeansErrorCodes.InvalidRequest, "Unsupported ACL operation.", 400);
+    }
+
+    /// <summary>
+    /// Deletes up to 1000 keys in one request. Authorization is evaluated per key so a denied key is
+    /// reported as an entry-level error, matching how S3 reports partial failures.
+    /// </summary>
+    private static async Task HandleDeleteObjectsAsync(
+        HttpContext context,
+        string bucketName,
+        IObjectStore store,
+        S3RequestAuthorizer authorizer,
+        CancellationToken cancellationToken)
+    {
+        if (!HttpMethods.IsPost(context.Request.Method))
+        {
+            throw new MeansException(MeansErrorCodes.InvalidRequest, "DeleteObjects requires POST.", 400);
+        }
+
+        var (requested, quiet) = await S3RequestParser.ParseDeleteObjectsAsync(context.Request.Body, cancellationToken);
+        var authorized = new List<BatchDeleteObjectIdentifier>(requested.Count);
+        var rejected = new List<BatchDeleteError>();
+        foreach (var identifier in requested)
+        {
+            try
+            {
+                S3RequestParser.ValidateObjectKey(identifier.Key);
+                await authorizer.AuthorizeAsync(context, S3Actions.DeleteObject, bucketName, identifier.Key, requireAuthenticated: false, cancellationToken);
+                authorized.Add(identifier);
+            }
+            catch (MeansException ex)
+            {
+                rejected.Add(new BatchDeleteError(identifier.Key, identifier.VersionId, ex.Code, ex.Message));
+            }
+        }
+
+        var result = await store.DeleteObjectsAsync(bucketName, authorized, cancellationToken);
+        if (rejected.Count > 0)
+        {
+            result = result with { Errors = [.. result.Errors, .. rejected] };
+        }
+
+        await S3ResponseWriter.WriteXmlAsync(context, StatusCodes.Status200OK, S3Xml.DeleteResult(result, quiet), cancellationToken);
     }
 
     private static async Task HandleVersioningAsync(
@@ -248,5 +430,24 @@ internal static class S3BucketEndpoint
         }
 
         throw new MeansException(MeansErrorCodes.InvalidRequest, "Unsupported notification operation.", 400);
+    }
+
+    internal static async Task EnsureOwnerOnlyAclAsync(HttpContext context, CancellationToken cancellationToken)
+    {
+        if (!await S3RequestParser.ParseAclRequestIsOwnerOnlyAsync(context, cancellationToken))
+        {
+            throw new MeansException(
+                MeansErrorCodes.NotImplemented,
+                "Only owner-only ACLs are supported. Use a bucket policy to grant anonymous access.",
+                501);
+        }
+    }
+
+    private static async Task EnsureBucketExistsAsync(IObjectStore store, string bucketName, CancellationToken cancellationToken)
+    {
+        if (await store.GetBucketAsync(bucketName, cancellationToken) is null)
+        {
+            throw new MeansException(MeansErrorCodes.NoSuchBucket, "Bucket does not exist.", 404);
+        }
     }
 }

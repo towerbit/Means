@@ -9,6 +9,7 @@ Means 使用标准 ASP.NET Core configuration。默认配置位于 `src/Means/ap
 | `Means:S3:ServiceHost` | `api.means.local` | path-style S3 host |
 | `Means:S3:DomainSuffix` | `means.local` | virtual-hosted-style bucket suffix |
 | `Means:S3:AliasPrefix` | `/s3` | 同源 S3 alias 路径，代码默认值来自 `S3AddressingOptions` |
+| `Means:S3:Region` | `us-east-1` | `GetBucketLocation` 与 `x-amz-bucket-region` 返回的 region，需与客户端签名 region 一致 |
 
 SDK endpoint 应指向数据面。例如同源 alias 部署时使用 `https://host/s3/`；独立 S3 host 部署时使用 `https://api.means.local/`。
 

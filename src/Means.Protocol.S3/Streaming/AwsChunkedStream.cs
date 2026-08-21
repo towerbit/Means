@@ -16,20 +16,37 @@ public sealed class AwsChunkedStream : Stream
 
     private readonly Stream _inner;
     private readonly byte[] _buffer;
+    private readonly long? _expectedDecodedLength;
+    private readonly Dictionary<string, string> _trailers = new(StringComparer.OrdinalIgnoreCase);
     private int _bufferStart;
     private int _bufferEnd;
     private long _chunkRemaining;
     private bool _finished;
     private long _decodedLength;
 
-    public AwsChunkedStream(Stream inner, int bufferSize = 16 * 1024)
+    /// <param name="inner">The framed request body.</param>
+    /// <param name="expectedDecodedLength">
+    /// The payload size the client declared through <c>x-amz-decoded-content-length</c>. When
+    /// supplied, a body that decodes to a different size is rejected instead of being stored
+    /// truncated: a connection that drops on a frame boundary otherwise looks like a clean
+    /// end of stream.
+    /// </param>
+    /// <param name="bufferSize">Size of the internal read buffer.</param>
+    public AwsChunkedStream(Stream inner, long? expectedDecodedLength = null, int bufferSize = 16 * 1024)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        _expectedDecodedLength = expectedDecodedLength;
         _buffer = new byte[Math.Max(bufferSize, 1024)];
     }
 
     /// <summary>Total number of payload bytes produced so far.</summary>
     public long DecodedLength => _decodedLength;
+
+    /// <summary>
+    /// Trailing headers that followed the terminating frame, populated once the stream reaches its
+    /// end. AWS SDKs use these to carry <c>x-amz-checksum-*</c> values.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Trailers => _trailers;
 
     public override bool CanRead => true;
     public override bool CanSeek => false;
@@ -72,7 +89,10 @@ public sealed class AwsChunkedStream : Stream
 
             if (!await EnsureBufferedAsync(1, cancellationToken))
             {
-                throw MalformedChunkedBody();
+                throw new MeansException(
+                    MeansErrorCodes.IncompleteBody,
+                    "The aws-chunked request body ended inside a chunk payload.",
+                    400);
             }
 
             var available = (int)Math.Min(Math.Min(buffer.Length, _bufferEnd - _bufferStart), _chunkRemaining);
@@ -136,8 +156,8 @@ public sealed class AwsChunkedStream : Stream
         var header = await ReadLineAsync(cancellationToken);
         if (header is null)
         {
-            // Truncated body after the last payload chunk; treat as end of stream.
-            _finished = true;
+            // The body ended without a terminating frame.
+            Finish();
             return false;
         }
 
@@ -150,13 +170,27 @@ public sealed class AwsChunkedStream : Stream
         var size = ParseChunkSize(header);
         if (size == 0)
         {
-            await SkipTrailersAsync(cancellationToken);
-            _finished = true;
+            await ReadTrailersAsync(cancellationToken);
+            Finish();
             return false;
+        }
+
+        if (_expectedDecodedLength is { } expected && _decodedLength + size > expected)
+        {
+            throw IncompleteBody(_decodedLength + size, expected);
         }
 
         _chunkRemaining = size;
         return true;
+    }
+
+    private void Finish()
+    {
+        _finished = true;
+        if (_expectedDecodedLength is { } expected && _decodedLength != expected)
+        {
+            throw IncompleteBody(_decodedLength, expected);
+        }
     }
 
     private static long ParseChunkSize(string header)
@@ -173,7 +207,7 @@ public sealed class AwsChunkedStream : Stream
         return size;
     }
 
-    private async ValueTask SkipTrailersAsync(CancellationToken cancellationToken)
+    private async ValueTask ReadTrailersAsync(CancellationToken cancellationToken)
     {
         while (true)
         {
@@ -181,6 +215,12 @@ public sealed class AwsChunkedStream : Stream
             if (line is null || line.Length == 0)
             {
                 return;
+            }
+
+            var separator = line.IndexOf(':', StringComparison.Ordinal);
+            if (separator > 0)
+            {
+                _trailers[line[..separator].Trim()] = line[(separator + 1)..].Trim();
             }
         }
     }
@@ -273,5 +313,13 @@ public sealed class AwsChunkedStream : Stream
     private static MeansException MalformedChunkedBody()
     {
         return new MeansException(MeansErrorCodes.InvalidRequest, "Malformed aws-chunked request body.", 400);
+    }
+
+    private static MeansException IncompleteBody(long decodedLength, long expectedLength)
+    {
+        return new MeansException(
+            MeansErrorCodes.IncompleteBody,
+            $"The aws-chunked body decoded to {decodedLength} bytes but x-amz-decoded-content-length declared {expectedLength}.",
+            400);
     }
 }

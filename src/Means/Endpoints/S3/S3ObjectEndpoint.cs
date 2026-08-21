@@ -10,6 +10,20 @@ namespace Means.Endpoints.S3;
 /// </summary>
 internal static class S3ObjectEndpoint
 {
+    /// <summary>
+    /// Object subresources defined by S3 that Means does not implement. Rejecting them explicitly
+    /// keeps clients from mistaking an unrelated response for a successful subresource read.
+    /// </summary>
+    private static readonly string[] UnsupportedSubresources =
+    [
+        "attributes",
+        "legal-hold",
+        "restore",
+        "retention",
+        "select",
+        "torrent"
+    ];
+
     public static async Task HandleAsync(
         HttpContext context,
         string bucketName,
@@ -24,6 +38,23 @@ internal static class S3ObjectEndpoint
         {
             await HandleObjectTaggingAsync(context, bucketName, key, store, authorizer, cancellationToken);
             return;
+        }
+
+        if (context.Request.Query.ContainsKey("acl"))
+        {
+            await HandleObjectAclAsync(context, bucketName, key, store, authorizer, cancellationToken);
+            return;
+        }
+
+        var unsupported = UnsupportedSubresources.FirstOrDefault(context.Request.Query.ContainsKey);
+        if (unsupported is not null)
+        {
+            // Authenticate first so anonymous callers cannot probe which subresources exist.
+            await authorizer.RequireAuthenticatedAsync(context, cancellationToken);
+            throw new MeansException(
+                MeansErrorCodes.NotImplemented,
+                $"The object subresource '{unsupported}' is not implemented.",
+                501);
         }
 
         if (HttpMethods.IsPost(method) && context.Request.Query.ContainsKey("uploads"))
@@ -121,6 +152,7 @@ internal static class S3ObjectEndpoint
         CancellationToken cancellationToken)
     {
         await authorizer.AuthorizeAsync(context, S3Actions.PutObject, bucketName, key, requireAuthenticated: false, cancellationToken);
+        S3RequestParser.EnsureSupportedCannedAcl(context);
         var upload = await store.InitiateMultipartUploadAsync(
             new InitiateMultipartUploadRequest(
                 bucketName,
@@ -145,12 +177,13 @@ internal static class S3ObjectEndpoint
         await authorizer.AuthorizeAsync(context, S3Actions.PutObject, bucketName, key, requireAuthenticated: false, cancellationToken);
         var uploadId = S3RequestParser.ParseUploadId(context.Request.Query["uploadId"].FirstOrDefault());
         var partNumber = S3RequestParser.ParsePartNumber(context.Request.Query["partNumber"].FirstOrDefault());
-        var content = S3RequestParser.OpenUploadBody(context);
+        await using var content = S3RequestParser.OpenUploadBody(context);
         var part = await store.UploadPartAsync(new UploadPartRequest(bucketName, key, uploadId, partNumber, content), cancellationToken);
 
         context.Items[S3MetricsItems.IngressBytes] = part.Size;
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.Headers.ETag = S3Xml.QuoteEtag(part.ETag);
+        content.ApplyChecksumHeaders(context.Response);
     }
 
     private static async Task UploadPartCopyAsync(
@@ -244,7 +277,8 @@ internal static class S3ObjectEndpoint
         CancellationToken cancellationToken)
     {
         await authorizer.AuthorizeAsync(context, S3Actions.PutObject, bucketName, key, requireAuthenticated: false, cancellationToken);
-        var content = S3RequestParser.OpenUploadBody(context);
+        S3RequestParser.EnsureSupportedCannedAcl(context);
+        await using var content = S3RequestParser.OpenUploadBody(context);
         var info = await store.PutObjectAsync(
             new PutObjectRequest(
                 bucketName,
@@ -261,6 +295,7 @@ internal static class S3ObjectEndpoint
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.Headers.ETag = S3Xml.QuoteEtag(info.ETag);
         context.Response.Headers["x-amz-version-id"] = info.ObjectId;
+        content.ApplyChecksumHeaders(context.Response);
     }
 
     private static async Task CopyObjectAsync(
@@ -272,6 +307,7 @@ internal static class S3ObjectEndpoint
         CancellationToken cancellationToken)
     {
         await authorizer.AuthorizeAsync(context, S3Actions.PutObject, bucketName, key, requireAuthenticated: false, cancellationToken);
+        S3RequestParser.EnsureSupportedCannedAcl(context);
         var (sourceBucket, sourceKey, sourceVersionId) = S3RequestParser.ParseCopySource(context.Request.Headers["x-amz-copy-source"].ToString());
         await authorizer.AuthorizeAsync(context, S3Actions.GetObject, sourceBucket, sourceKey, requireAuthenticated: false, cancellationToken);
 
@@ -290,6 +326,41 @@ internal static class S3ObjectEndpoint
             cancellationToken);
 
         await S3ResponseWriter.WriteXmlAsync(context, StatusCodes.Status200OK, S3Xml.CopyObjectResult(copied), cancellationToken);
+    }
+
+    private static async Task HandleObjectAclAsync(
+        HttpContext context,
+        string bucketName,
+        string key,
+        IObjectStore store,
+        S3RequestAuthorizer authorizer,
+        CancellationToken cancellationToken)
+    {
+        var versionId = context.Request.Query["versionId"].FirstOrDefault();
+        if (HttpMethods.IsGet(context.Request.Method))
+        {
+            await authorizer.AuthorizeAsync(context, S3Actions.GetObjectAcl, bucketName, key, requireAuthenticated: true, cancellationToken);
+            // HeadObject surfaces NoSuchKey/NoSuchVersion so the ACL response cannot describe a missing object.
+            _ = await store.HeadObjectAsync(bucketName, key, versionId, cancellationToken);
+            var publicRead = await authorizer.IsAnonymousAllowedAsync(S3Actions.GetObject, bucketName, key, cancellationToken);
+            await S3ResponseWriter.WriteXmlAsync(
+                context,
+                StatusCodes.Status200OK,
+                S3Xml.AccessControlPolicy(S3AccessControlPolicy.ForDeploymentOwner(publicRead)),
+                cancellationToken);
+            return;
+        }
+
+        if (HttpMethods.IsPut(context.Request.Method))
+        {
+            await authorizer.AuthorizeAsync(context, S3Actions.PutObjectAcl, bucketName, key, requireAuthenticated: true, cancellationToken);
+            _ = await store.HeadObjectAsync(bucketName, key, versionId, cancellationToken);
+            await S3BucketEndpoint.EnsureOwnerOnlyAclAsync(context, cancellationToken);
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            return;
+        }
+
+        throw new MeansException(MeansErrorCodes.InvalidRequest, "Unsupported ACL operation.", 400);
     }
 
     private static async Task HandleObjectTaggingAsync(

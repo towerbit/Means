@@ -80,6 +80,15 @@ All SDKs expose the same logical operations:
 
 Language-specific casing may follow the host language: C# uses PascalCase async methods, TypeScript uses camelCase methods.
 
+The server also implements operations that the v1 SDK surface does not wrap. They are marked `serverOnly: true` in `means-sdk-v1.yaml` and are reachable through any S3 client:
+
+- `listObjectsV1` — `GET /{bucket}` without `list-type`, paginated with `marker`/`NextMarker`
+- `deleteObjects` — `POST /{bucket}?delete`, up to 1000 keys per request
+- `getBucketLocation` — `GET /{bucket}?location`
+- `getBucketAcl`, `putBucketAcl`, `getObjectAcl`, `putObjectAcl` — `?acl`, owner-only canned ACLs
+
+`listObjects` uses `list-type=2` and additionally accepts `start-after`. Both listing generations accept `encoding-type=url`, which URL-encodes keys, prefixes, delimiters, and markers in the response.
+
 ## Multipart Upload
 
 SDKs support client-side multipart upload with these constraints:

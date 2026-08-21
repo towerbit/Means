@@ -14,13 +14,12 @@ internal static class S3RequestParser
     /// <summary>
     /// Returns the object payload stream for an upload request.
     /// AWS SDKs default to SigV4 streaming uploads, which frame the payload with
-    /// <c>aws-chunked</c> chunk headers and trailers; those frames must be stripped before storage.
+    /// <c>aws-chunked</c> chunk headers and trailers; those frames must be stripped before storage,
+    /// and the declared length and checksums must be verified against what actually arrives.
     /// </summary>
-    public static Stream OpenUploadBody(HttpContext context)
+    public static S3UploadBodyStream OpenUploadBody(HttpContext context)
     {
-        return AwsChunkedStream.IsChunkedUpload(context.Request)
-            ? new AwsChunkedStream(context.Request.Body)
-            : context.Request.Body;
+        return S3UploadBodyStream.Create(context.Request);
     }
 
     public static IReadOnlyDictionary<string, string> ExtractMetadata(HttpContext context)
@@ -128,6 +127,117 @@ internal static class S3RequestParser
         return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
             ? Math.Clamp(parsed, 1, 1000)
             : 1000;
+    }
+
+    /// <summary>
+    /// Validates the <c>encoding-type</c> listing parameter. Only <c>url</c> exists in S3.
+    /// </summary>
+    public static string? ParseEncodingType(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return string.Equals(value, "url", StringComparison.OrdinalIgnoreCase)
+            ? "url"
+            : throw new MeansException(MeansErrorCodes.InvalidArgument, "Invalid encoding-type. Only 'url' is supported.", 400);
+    }
+
+    /// <summary>
+    /// Rejects canned ACLs that would grant access Means cannot represent.
+    /// Means has no ACL store, so grants beyond the bucket owner must fail loudly instead of being
+    /// silently dropped; anonymous access is configured through bucket policy instead.
+    /// </summary>
+    public static void EnsureSupportedCannedAcl(HttpContext context)
+    {
+        var requested = GetHeader(context, "x-amz-acl");
+        var hasExplicitGrant = context.Request.Headers.Keys.Any(name =>
+            name.StartsWith("x-amz-grant-", StringComparison.OrdinalIgnoreCase));
+        if (hasExplicitGrant || (requested is not null && !IsOwnerOnlyCannedAcl(NormalizeCannedAcl(requested))))
+        {
+            throw new MeansException(
+                MeansErrorCodes.NotImplemented,
+                "Only owner-only canned ACLs are supported. Use a bucket policy to grant anonymous access.",
+                501);
+        }
+    }
+
+    /// <summary>
+    /// Reads the canned ACL of a PUT ?acl request from either the <c>x-amz-acl</c> header or an
+    /// <c>AccessControlPolicy</c> body, and reports whether it only grants the owner.
+    /// </summary>
+    public static async Task<bool> ParseAclRequestIsOwnerOnlyAsync(HttpContext context, CancellationToken cancellationToken)
+    {
+        var requested = GetHeader(context, "x-amz-acl");
+        if (requested is not null)
+        {
+            return IsOwnerOnlyCannedAcl(NormalizeCannedAcl(requested));
+        }
+
+        using var reader = new StreamReader(context.Request.Body, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var xml = await reader.ReadToEndAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return true;
+        }
+
+        var root = ReadRootContent(xml, "AccessControlPolicy", "Malformed AccessControlPolicy XML.");
+        return !Elements(root, "URI").Any(uri =>
+            DecodeXml(uri).Contains("AllUsers", StringComparison.OrdinalIgnoreCase)
+            || DecodeXml(uri).Contains("AuthenticatedUsers", StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static async Task<(IReadOnlyList<BatchDeleteObjectIdentifier> Objects, bool Quiet)> ParseDeleteObjectsAsync(
+        Stream body,
+        CancellationToken cancellationToken)
+    {
+        var root = ReadRootContent(await ReadXmlBodyAsync(body, cancellationToken), "Delete", "Malformed Delete XML.");
+        var objects = new List<BatchDeleteObjectIdentifier>();
+        foreach (var element in Elements(root, "Object"))
+        {
+            var key = FirstElementValue(element, "Key");
+            if (string.IsNullOrEmpty(key))
+            {
+                throw new MeansException(MeansErrorCodes.MalformedXML, "Delete entries require a Key.", 400);
+            }
+
+            objects.Add(new BatchDeleteObjectIdentifier(key, FirstElementValue(element, "VersionId")));
+        }
+
+        if (objects.Count == 0)
+        {
+            throw new MeansException(MeansErrorCodes.MalformedXML, "Delete requires at least one Object entry.", 400);
+        }
+
+        if (objects.Count > 1000)
+        {
+            throw new MeansException(MeansErrorCodes.MalformedXML, "Delete accepts at most 1000 Object entries.", 400);
+        }
+
+        var quiet = string.Equals(FirstElementValue(root, "Quiet"), "true", StringComparison.OrdinalIgnoreCase);
+        return (objects, quiet);
+    }
+
+    private static bool IsOwnerOnlyCannedAcl(string cannedAcl)
+    {
+        // bucket-owner-* grants collapse to "owner only" in a single-tenant deployment.
+        return cannedAcl is S3CannedAcls.Private or "bucket-owner-read" or "bucket-owner-full-control";
+    }
+
+    private static string NormalizeCannedAcl(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized is S3CannedAcls.Private
+            or S3CannedAcls.PublicRead
+            or "public-read-write"
+            or "authenticated-read"
+            or "aws-exec-read"
+            or "bucket-owner-read"
+            or "bucket-owner-full-control"
+            or "log-delivery-write"
+            ? normalized
+            : throw new MeansException(MeansErrorCodes.InvalidArgument, "Invalid x-amz-acl header.", 400);
     }
 
     public static int ParseMaxUploads(string? value)

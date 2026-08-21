@@ -6,11 +6,14 @@ namespace Means.Core;
 public static class MeansErrorCodes
 {
     public const string AccessDenied = "AccessDenied";
+    public const string BadDigest = "BadDigest";
     public const string BucketAlreadyExists = "BucketAlreadyExists";
     public const string BucketNotEmpty = "BucketNotEmpty";
     public const string EntityTooLarge = "EntityTooLarge";
     public const string EntityTooSmall = "EntityTooSmall";
+    public const string IncompleteBody = "IncompleteBody";
     public const string InvalidArgument = "InvalidArgument";
+    public const string InvalidDigest = "InvalidDigest";
     public const string InvalidPart = "InvalidPart";
     public const string InvalidPartOrder = "InvalidPartOrder";
     public const string InvalidRange = "InvalidRange";
@@ -23,8 +26,10 @@ public static class MeansErrorCodes
     public const string NoSuchLifecycleConfiguration = "NoSuchLifecycleConfiguration";
     public const string NoSuchUpload = "NoSuchUpload";
     public const string NoSuchVersion = "NoSuchVersion";
+    public const string NotImplemented = "NotImplemented";
     public const string NotModified = "NotModified";
     public const string PreconditionFailed = "PreconditionFailed";
     public const string SignatureDoesNotMatch = "SignatureDoesNotMatch";
     public const string SlowDown = "SlowDown";
+    public const string XAmzContentChecksumMismatch = "XAmzContentChecksumMismatch";
 }

@@ -13,6 +13,17 @@ namespace Means.Endpoints.S3;
 /// </summary>
 public static class S3Endpoint
 {
+    private static readonly string[] NonListingBucketSubresources =
+    [
+        "acl",
+        "cors",
+        "lifecycle",
+        "location",
+        "notification",
+        "policy",
+        "versioning"
+    ];
+
     public static async Task HandleAsync(
         HttpContext context,
         IObjectStore store,
@@ -30,9 +41,10 @@ public static class S3Endpoint
         var handledError = false;
         S3ResponseWriter.StartTraceHeaders(context, requestId);
 
+        var addressing = addressingOptions.Value;
         try
         {
-            address = S3AddressResolver.Resolve(context.Request, addressingOptions.Value);
+            address = S3AddressResolver.Resolve(context.Request, addressing);
             isListOperation = IsListOperation(context, address);
             var authorizer = new S3RequestAuthorizer(accessKeys, policies, policyEvaluator, verifier);
 
@@ -48,7 +60,14 @@ public static class S3Endpoint
                 return;
             }
 
-            await S3RequestRouter.DispatchAsync(context, address, store, consoleStore, authorizer, cancellationToken);
+            await S3RequestRouter.DispatchAsync(
+                context,
+                address,
+                string.IsNullOrWhiteSpace(addressing.Region) ? "us-east-1" : addressing.Region.Trim(),
+                store,
+                consoleStore,
+                authorizer,
+                cancellationToken);
         }
         catch (MeansException ex)
         {
@@ -97,8 +116,8 @@ public static class S3Endpoint
 
         if (address.ObjectKey is null)
         {
-            return context.Request.Query["list-type"] == "2"
-                || context.Request.Query.ContainsKey("uploads");
+            // Bucket-level GET lists objects, versions, or uploads unless it targets a configuration subresource.
+            return !NonListingBucketSubresources.Any(context.Request.Query.ContainsKey);
         }
 
         return context.Request.Query.ContainsKey("uploadId");
